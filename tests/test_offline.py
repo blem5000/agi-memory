@@ -207,6 +207,34 @@ assert _stem("deployment") != _stem("dependency"), "unrelated words collapsed"
 # stems that equal their source add nothing and are dropped
 assert "retry" not in _stems(["retry"]) or _stem("retry") != "retry"
 
+# Canonicalization must be verifiably ACTIVE end-to-end through the MCP path,
+# not merely present in the layer. It was silently disabled once already: a
+# lazy import shadowed GraphLayer, the resolver raised NameError into its own
+# except clause, and every eval still passed because nothing asserted the
+# feature actually ran. A broad except that hides a dead feature is worse than
+# a crash, so this test exercises the real call path.
+with tempfile.TemporaryDirectory() as tmp_dir:
+    _cpath = Path(tmp_dir) / "canon_mcp.db"
+    import subprocess as _sp2
+    _proc = _sp2.run(
+        [sys.executable, "-c",
+         "import sys, sqlite3, os;"
+         "sys.path.insert(0, %r);"
+         "from agi_memory.layers.graph_layer import GraphLayer;"
+         "from agi_memory import mcp_server as m;"
+         "GraphLayer().add_alias('login', 'authentication');"
+         "m.call_tool('memory_record', {'text': 'Moved the login flow.',"
+         " 'title': 'Login', 'project': 'canonmcp'});"
+         "print(sqlite3.connect(os.environ['AGI_MEMORY_DB'])"
+         ".execute('SELECT concepts FROM observations').fetchone()[0])"
+         % str(Path(__file__).resolve().parent.parent / "src")],
+        capture_output=True, text=True,
+        env={**os.environ, "AGI_MEMORY_DB": str(_cpath), "AGI_MEMORY_DIR": tmp_dir})
+    assert "authentication" in _proc.stdout, (
+        "write-time canonicalization is not reaching the database through the MCP "
+        f"path -- it may be silently disabled again. stdout={_proc.stdout!r} "
+        f"stderr={_proc.stderr[-300:]!r}")
+
 # Internal-character typos: stemming cannot repair damage in the middle of a
 # word, so a fragment-coverage fallback runs when everything else found nothing.
 with tempfile.TemporaryDirectory() as tmp_dir:

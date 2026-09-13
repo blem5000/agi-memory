@@ -4,7 +4,7 @@ Durable record of known defects, deferred work, and the reasoning behind
 decisions that are easy to re-litigate. Each item states the evidence, so a
 future session can act without re-deriving it.
 
-Last reviewed: 2026-09-13 (at v0.4.0 + 6 unreleased commits).
+Last reviewed: 2026-09-13 (council-reviewed after backlog completion).
 
 ---
 
@@ -109,13 +109,23 @@ leaves almost nothing to match.
 
 ---
 
-## 4. Synonyms are out of reach lexically — CLOSED, won't-fix by design
+## 4. Synonyms — PARTIALLY reached, NOT closed (council, 2026-09-13)
 
 Paraphrase recall is ~6% and no stemming, folding or trigram technique will
 move it: `login` -> `authentication` is semantic distance, not surface
-distance. Deliberately left to the L2 entity-alias table and/or host-side
-query expansion. Documented as a boundary, not a gap. Do not attempt to fix
-this with a looser matcher — that trades precision for nothing.
+distance. Do not attempt to fix this with a looser matcher — that trades
+precision for nothing.
+
+Item 2's write-time canonicalization reaches synonyms **only for pairs already
+in the alias table**. The council called the earlier "closed" status a paper
+close, correctly: an agent writing "auth" when the table only knows "login"
+still gets nothing. Coverage of the alias table is the real open question, and
+nobody has measured it. Treat this as OPEN with a partial mitigation, not
+solved.
+
+**Next step if picked up**: measure alias-table coverage against terms that
+actually appear in recorded memories, rather than assuming the table is
+populated.
 
 ---
 
@@ -180,3 +190,26 @@ as self-consistency, not validation, until an outside user disagrees.
 - **Do not chase the enterprise/air-gapped pivot** yet. Interesting, but a
   heavier lift than shipping better search for one unpaid maintainer with zero
   users.
+
+---
+
+## Post-completion council review (2026-09-13)
+
+Reviewed after all items were delivered. Findings:
+
+- **Item 4 was a paper close** — corrected above.
+- **The silent-failure class was the real risk**, not the two bugs found. A
+  broad `except` around the canonicalization resolver could disable the feature
+  again with every eval still passing. Closed with an end-to-end test that
+  drives the real MCP path and asserts canonical terms reach the database;
+  verified it fails when the original defect is reintroduced.
+- **Ship as 0.5.0, not 1.0.** 1.0 is a promise about API and data stability
+  that cannot be made with zero external users and self-authored evals.
+- **Do not post the launch drafts yet.** Gate them on a clean install performed
+  on a machine that is not the maintainer's, and on two real machines syncing.
+  Posting first converts a launch into a bug-report flood a solo maintainer
+  cannot triage.
+- **Stop optimizing recall.** 100% exact / 35% degraded is enough; further
+  tuning is diminishing returns against getting any external user.
+- **The self-grading discount still applies** and does not appear anywhere in
+  the reported numbers. Every eval was authored by the code's author.
