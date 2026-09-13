@@ -510,7 +510,8 @@ def import_from_vault(
                     ch,
                     d.get("generated_by_model", "sync"),
                     d.get("relevance_count", 0),
-                    d.get("sync_rev", "vault")
+                    d.get("sync_rev", "vault"),
+                    d.get("rationale")
                 ))
                 existing_hashes.add(ch)
 
@@ -520,8 +521,8 @@ def import_from_vault(
                     memory_session_id, project, type, title, subtitle, facts,
                     narrative, concepts, files_read, files_modified, prompt_number,
                     discovery_tokens, created_at, created_at_epoch, content_hash,
-                    generated_by_model, relevance_count, sync_rev
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    generated_by_model, relevance_count, sync_rev, rationale
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, rows_to_insert)
             con.commit()
             imported_obs = len(rows_to_insert)

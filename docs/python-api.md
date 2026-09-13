@@ -18,7 +18,8 @@ res = l1.record(
     text="Always use secure_storage for JWT tokens on mobile",
     title="JWT Storage Rule",
     category="architecture",
-    supersedes="#101"
+    supersedes="#101",
+    rationale="Keychain survives reinstall; SharedPreferences is world-readable on rooted devices",
 )
 
 # 2. Semantic: Ingest relations into L2 graph directly

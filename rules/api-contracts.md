@@ -28,6 +28,10 @@ Persists verified technical learnings, decisions, or rules into session memory a
   - `category` (string, optional, default: `"decision"`): One of `"architecture"`, `"pattern"`, `"bugfix"`, `"convention"`, `"decision"`.
   - `project` (string, optional): Target project name.
   - `supersedes` (string, optional): ID (`#1234`) or keywords of an older memory that this record overrides/replaces.
+  - `rationale` (string, optional): Why the decision was made - the constraints and tradeoffs
+    behind it. Stored on its own column, appended to `facts` so it is searchable, rendered as
+    `Why: ...` in recall, and carried across machines by the vault. Without it a later session
+    inherits a conclusion it cannot re-examine.
   - `relations` (array of objects, optional): Knowledge graph triples to store directly into L2 durable memory:
     - `source` (string, required): Source concept/entity.
     - `relation` (string, required): Relationship type (`USES`, `REPLACES`, `IMPLEMENTS`, `FORBIDS`).

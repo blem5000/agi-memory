@@ -251,7 +251,7 @@ gets the same guid and would be suppressed. Worth revisiting if anyone hits it.
 
 ---
 
-## 9. Abandoned sessions come back as open tasks — CONFIRMED BUG (reported externally)
+## 9. Abandoned sessions come back as open tasks — FIXED (2026-09-14)
 
 **Severity: high.** Named by a commenter as "context poisoning", and they were
 right; nothing in the design addresses it.
@@ -270,13 +270,17 @@ open task with a running start.
 The failure generalises: we store *what happened* and never *how it ended*.
 A rejected design, a reverted change and a shipped feature all recap the same.
 
-**Proposed fix**:
-- An outcome on `end_session`: completed / abandoned / blocked / superseded,
-  defaulting to unknown rather than to success.
-- Recap should render outcome first and never present an abandoned session as
-  continuable — ideally "we tried X and stopped, do not resume without asking".
-- Same root problem as item 11: memory is injected as fact rather than as
-  something with provenance and a status.
+**Fixed**: `episodic_sessions` gained an `outcome` column (completed /
+abandoned / blocked / superseded / unknown, defaulting to `unknown`), a
+`set_outcome()` separate from `end_session()` because the caller who knows how
+the work went is not the lifecycle hook that ends it, and recap/timeline
+rendering that leads with the outcome and refuses to present anything unmarked
+as continuable. Exposed as `memory_session_outcome` and `agi-memory outcome`.
+
+**Residual**: until agents actually call it, every session reads `unknown`,
+which is honest but noisy. The memory-discipline rules now ask for the call.
+Worth checking after a week of real use whether agents comply; if they do not,
+the warning becomes wallpaper and needs rethinking rather than louder wording.
 
 ---
 
@@ -313,7 +317,7 @@ found neither.
 
 ---
 
-## 11. Decisions arrive as settled context, with no rationale — OPEN (reported externally)
+## 11. Decisions arrive as settled context, with no rationale — PARTIALLY FIXED (2026-09-14)
 
 Raised by a commenter running a multi-role Claude Code setup: carrying
 decisions forward is useful right up until the decision was wrong. After that
@@ -346,11 +350,22 @@ longer hold". A wrong decision with good reasoning attached still reads as
 settled. Same root cause as item 9 — outcomes and status are not part of how
 memory is presented, only of how it is stored.
 
-**Proposed first steps** (cheap, do not solve the framing problem):
-- Add `superseded_by` to `observations` and render "superseded by #N" in recall
-  so the chain is walkable.
-- Add an optional `rationale` field to `memory_record`, and mention it in the
-  memory-discipline rules so agents populate it.
+**Done (2026-09-14)**, both of the cheap steps:
+- `observations.superseded_by` (migrated in place) and recall now renders
+  `[SUPERSEDED by #N]`, so a dead decision names its replacement instead of
+  only announcing that it is dead.
+- `rationale` on `memory_record` and `SessionLayer.record()`: its own column,
+  also appended to `facts` so FTS can reach it, rendered as `Why: ...` in
+  recall and `Why:` in `agi-memory inspect`, and carried through the vault so
+  it survives the machine boundary. Asked for in the memory-discipline rules.
+
+**Still open, and it is the harder half**: a stored rationale still returns as
+prose in a retrieved block. Nothing marks it as "argued for under constraints
+that may no longer hold", and nothing records what those constraints were, so a
+wrong decision with good reasoning attached still reads as settled. Confidence
+and constraint capture remain unbuilt. Also unbuilt: supersession does not
+survive a vault import on a second machine, because `superseded_by` holds a
+local row id — the marker text carries over, the link does not.
 
 **Correction to make if this thread continues**: I told the commenter
 supersession was not surfaced. It partly is — the `[SUPERSEDED]` marker exists.

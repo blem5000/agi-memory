@@ -106,6 +106,7 @@ class SessionLayer(MemoryLayer):
         # Optional canonicalizer, injected rather than imported: L1 must not
         # depend on L2. Supplied by the MCP server, which owns both layers.
         self.term_resolver = term_resolver
+        self._migrate_columns_if_needed()
         self._migrate_fts_if_needed()
 
 
@@ -164,6 +165,32 @@ class SessionLayer(MemoryLayer):
         except sqlite3.Error:
             return 0
 
+    def _migrate_columns_if_needed(self) -> None:
+        """Add columns introduced after a database was first created.
+
+        _init_db only builds the schema for a brand-new database, so a column
+        added later never reaches an existing user's file -- and every read
+        naming it fails with "no such column".
+        """
+        if not self.db_path.exists():
+            return
+        try:
+            con = open_db(self.db_path)
+            try:
+                cols = {r[1] for r in con.execute("PRAGMA table_info(observations)")}
+                if not cols:  # table not created yet; _init_db will build it
+                    return
+                for col, decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER")):
+                    if col not in cols:
+                        con.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
+                con.commit()
+            except sqlite3.Error:
+                con.rollback()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass
+
     def _migrate_fts_if_needed(self) -> None:
         """Upgrade an existing database's FTS index when the tokenizer changes.
 
@@ -213,9 +240,18 @@ class SessionLayer(MemoryLayer):
                 type TEXT, title TEXT, subtitle TEXT, facts TEXT, narrative TEXT,
                 concepts TEXT, files_read TEXT, files_modified TEXT, prompt_number INT,
                 discovery_tokens INT, created_at TEXT, created_at_epoch INT, content_hash TEXT,
-                generated_by_model TEXT, relevance_count INT, sync_rev TEXT
+                generated_by_model TEXT, relevance_count INT, sync_rev TEXT,
+                rationale TEXT, superseded_by INTEGER
             )
         """)
+        # Added after the first release. `rationale` is why a decision was made,
+        # which previously survived only if the agent happened to write it into
+        # the prose. `superseded_by` makes the supersession chain walkable: the
+        # type flipped to 'superseded' but nothing pointed at the replacement.
+        _cols = {r[1] for r in con.execute("PRAGMA table_info(observations)")}
+        for _col, _decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER")):
+            if _col not in _cols:
+                con.execute(f"ALTER TABLE observations ADD COLUMN {_col} {_decl}")
         tokenize = _supported_tokenizer()
         rebuilt = _fts_needs_rebuild(con, tokenize)
         if rebuilt:
@@ -290,7 +326,8 @@ class SessionLayer(MemoryLayer):
             return []
         con = open_db(self.db_path, readonly=True)
         ph = ",".join("?" for _ in ids)
-        sql = ("SELECT id, project, title, facts, narrative, type FROM observations "
+        sql = ("SELECT id, project, title, facts, narrative, type, rationale, superseded_by "
+               "FROM observations "
                f"WHERE id IN ({ph})")
         args: list = [int(i) for i in ids]
         if self.project in ("agi-memory", "agent-memory"):
@@ -304,8 +341,14 @@ class SessionLayer(MemoryLayer):
         for row in rows:
             i, p, t, f, n = row[0], row[1], row[2], row[3], row[4]
             typ = row[5] if len(row) > 5 else "decision"
-            tag = "[SUPERSEDED] " if typ == "superseded" else ""
-            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {f} {n}".replace("  ", " "),
+            why = row[6] if len(row) > 6 else None
+            sup_by = row[7] if len(row) > 7 else None
+            # A dead decision must say what replaced it, not just that it is dead.
+            tag = ""
+            if typ == "superseded":
+                tag = f"[SUPERSEDED by #{sup_by}] " if sup_by else "[SUPERSEDED] "
+            why_str = f" | Why: {why}" if why else ""
+            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {f} {n}{why_str}".replace("  ", " "),
                                 source=self.name, ref=str(i))
         return [by_id[str(i)] for i in ids if str(i) in by_id]
 
@@ -432,11 +475,15 @@ class SessionLayer(MemoryLayer):
 
     def record(self, text: str, title: str | None = None,
                project: str | None = None, metadata: dict | None = None,
-               category: str = "decision", supersedes: str | None = None) -> dict:
+               category: str = "decision", supersedes: str | None = None,
+               rationale: str | None = None) -> dict:
         """Record an observation/decision into L1 memory via direct SQLite FTS5 insertion."""
         proj = project or self.project or "global"
         tit = title or (text[:60].strip() + ("..." if len(text) > 60 else ""))
         cat = (category or "decision").strip().lower()
+        # Why the decision was made. Also written into `facts` so it is reachable
+        # by search -- the FTS index covers facts, not this column.
+        why = (rationale or "").strip() or None
 
         # Direct SQLite insertion (self-bootstraps schema if needed).
         # The file existing does NOT imply L1's tables exist: a peer layer
@@ -509,13 +556,13 @@ class SessionLayer(MemoryLayer):
                 memory_session_id, project, type, title, subtitle,
                 facts, narrative, concepts, files_read, files_modified,
                 prompt_number, discovery_tokens, created_at, created_at_epoch,
-                content_hash, generated_by_model, relevance_count, sync_rev
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                content_hash, generated_by_model, relevance_count, sync_rev, rationale
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id, proj, cat, tit, "Recorded via agent-memory",
-            json.dumps([text]), text,
+            json.dumps([text] + ([f"Rationale: {why}"] if why else [])), text,
             json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
-            "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1"
+            "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1", why
         ))
         obs_id = cur.lastrowid
 
@@ -529,9 +576,10 @@ class SessionLayer(MemoryLayer):
                         cur.execute("""
                             UPDATE observations
                             SET type = 'superseded',
+                                superseded_by = ?,
                                 subtitle = COALESCE(subtitle, '') || ' [SUPERSEDED by #' || ? || ']'
                             WHERE id = ?
-                        """, (obs_id, eid))
+                        """, (obs_id, obs_id, eid))
                         if cur.rowcount > 0:
                             superseded_ids.append(eid)
             else:
@@ -553,9 +601,10 @@ class SessionLayer(MemoryLayer):
                         cur.execute("""
                             UPDATE observations
                             SET type = 'superseded',
+                                superseded_by = ?,
                                 subtitle = COALESCE(subtitle, '') || ' [SUPERSEDED by #' || ? || ']'
                             WHERE id = ?
-                        """, (obs_id, fid))
+                        """, (obs_id, obs_id, fid))
                         if cur.rowcount > 0:
                             superseded_ids.append(fid)
 
@@ -569,7 +618,7 @@ class SessionLayer(MemoryLayer):
             "type": cat,
             "title": tit,
             "subtitle": "Recorded via agent-memory",
-            "facts": json.dumps([text]),
+            "facts": json.dumps([text] + ([f"Rationale: {why}"] if why else [])),
             "narrative": text,
             "concepts": json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
             "files_read": "[]",
@@ -579,6 +628,7 @@ class SessionLayer(MemoryLayer):
             "created_at": now_iso,
             "created_at_epoch": now_epoch,
             "content_hash": content_hash,
+            "rationale": why,
             "generated_by_model": "agent-memory",
             "relevance_count": 0,
             "sync_rev": "1"
@@ -749,7 +799,7 @@ class SessionLayer(MemoryLayer):
             row = cur.execute("""
                 SELECT id, memory_session_id, project, type, title, subtitle,
                        facts, narrative, concepts, files_read, files_modified,
-                       created_at, created_at_epoch, content_hash
+                       created_at, created_at_epoch, content_hash, rationale, superseded_by
                 FROM observations WHERE id = ?
             """, (obs_id,)).fetchone()
             if not row:
@@ -769,6 +819,8 @@ class SessionLayer(MemoryLayer):
                 "created_at": row[11],
                 "created_at_epoch": row[12],
                 "content_hash": row[13],
+                "rationale": row[14],
+                "superseded_by": row[15],
             }
         finally:
             con.close()

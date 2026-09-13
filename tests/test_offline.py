@@ -680,9 +680,29 @@ with tempfile.TemporaryDirectory() as inflight_tmp:
         )
         assert obs1_id in r3["superseded_ids"], f"Expected #{obs1_id} to be superseded, got {r3['superseded_ids']}"
 
-        # 7d. Verify search ranks active decision first and tags superseded record
+        # 7d. Verify search ranks active decision first and tags superseded record.
+        # The tag must name the replacement: "this is dead" with no forward pointer
+        # leaves a reader unable to reach what replaced it (backlog #11).
         hits = sl_if.search("PostgreSQL", limit=5)
-        assert any("[SUPERSEDED]" in h.text for h in hits), f"Expected [SUPERSEDED] tag in hits: {[h.text for h in hits]}"
+        assert any(f"[SUPERSEDED by #{r3['id']}]" in h.text for h in hits), \
+            f"Expected a forward pointer to #{r3['id']} in hits: {[h.text for h in hits]}"
+        assert sl_if.get_observation(obs1_id)["superseded_by"] == r3["id"]
+
+        # 7d-bis. Rationale: the why must survive recording and come back with recall
+        r_why = sl_if.record(
+            text="Vault stays append-only JSONL",
+            title="Vault Format",
+            project="inflight-proj",
+            category="architecture",
+            rationale="git union-merges appends without conflict; in-place edits would not",
+        )
+        why_obs = sl_if.get_observation(r_why["id"])
+        assert why_obs["rationale"].startswith("git union-merges"), why_obs["rationale"]
+        why_hits = sl_if.search("append-only JSONL", limit=5)
+        assert any("Why: git union-merges" in h.text for h in why_hits), \
+            f"rationale missing from recall: {[h.text for h in why_hits]}"
+        assert any("union-merges" in h.text for h in sl_if.search("union-merges", limit=5)), \
+            "rationale must be reachable by search, not only rendered"
 
         # 7e. Test MCP memory_record with in-flight relations -> verifies L2 GraphLayer ingestion
         mcp_res = mcp_server.call_tool("memory_record", {

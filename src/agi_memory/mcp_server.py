@@ -58,6 +58,7 @@ TOOLS = [
                                                  "default": "decision", "description": "Category of the memory"},
                                     "project": {"type": "string", "description": "Target project name"},
                                     "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory that this decision overrides/replaces"},
+                                    "rationale": {"type": "string", "description": "Why this decision was made - the constraints and tradeoffs behind it. Record this whenever the reasoning would not be obvious to someone reading the decision alone; a future session cannot re-examine a decision it only knows the conclusion of."},
                                     "relations": {"type": "array",
                                                   "description": "Knowledge graph triples (source, relation, target) to store in L2 durable memory",
                                                   "items": {"type": "object",
@@ -301,7 +302,8 @@ def call_tool(name, args):
             title=title,
             project=project,
             category=category,
-            supersedes=supersedes
+            supersedes=supersedes,
+            rationale=args.get("rationale")
         )
         msg = res.get("message", f"Memory saved as observation #{res.get('id')}")
 
@@ -594,6 +596,10 @@ def cmd_inspect(argv: list[str]) -> None:
     print(f"Created:     {o['created_at']}")
     if o.get("subtitle"):
         print(f"Subtitle:    {o['subtitle']}")
+    if o.get("superseded_by"):
+        print(f"Replaced by: #{o['superseded_by']}")
+    if o.get("rationale"):
+        print(f"Why:         {o['rationale']}")
     if o.get("concepts"):
         print(f"Concepts:    {', '.join(o['concepts'])}")
     if o.get("facts"):
