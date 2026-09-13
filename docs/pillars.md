@@ -42,6 +42,12 @@ agi-memory promote --auto --limit 25
 *Answers: "What happened during previous agent sessions?"*
 - **Cross-Session Continuity**: Captures session lifecycles (start, end, duration, agent type), touched file sets, prompt events, and git commit deltas.
 - **Automated Briefing Injection**: When an assistant launches, the `session-start` lifecycle hook generates an executive briefing of the most recent session's activity (<0.25ms), preventing cold-start rediscovery loops.
+- **Session Outcomes (`memory_session_outcome` / `agi-memory outcome`)**: Record how a session
+  ended - `completed`, `abandoned`, `blocked` or `superseded`. Unmarked sessions stay
+  `unknown` rather than being reported as finished, and any outcome other than
+  `completed` is recapped with an explicit warning not to resume it without asking.
+  Without this, a dropped design session comes back next time looking like an open
+  task with a running start.
 - **Session Timelines (`memory_timeline` / `agi-memory timeline`)**: Retrieve structured chronological histories of prior sessions and inspect what changes were made across tools.
 ```bash
 # Inspect recent session activity and touched files

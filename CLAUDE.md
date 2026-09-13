@@ -13,7 +13,8 @@ When operating in this codebase:
 5. Call `code_structure(path)` to inspect class and function hierarchies in modules.
 6. Call `memory_record(text, title, project="agi-memory", category="...", supersedes="...", relations=[...])` when establishing conventions or resolving non-trivial issues.
 7. Pin non-negotiable invariants using `memory_pin(key, content, category="architecture", project="agi-memory")`.
-8. Call `memory_bootstrap(repo=".")` when operating in a newly attached workspace to seed cold-start architectural memory and code graph.
+8. Call `memory_session_outcome(outcome="abandoned"|"blocked"|"superseded"|"completed")` when work is dropped, blocked, replaced, or genuinely finished. Unmarked sessions stay `unknown` and are recapped with a do-not-resume warning.
+9. Call `memory_bootstrap(repo=".")` when operating in a newly attached workspace to seed cold-start architectural memory and code graph.
 
 ## Project Structure & Navigation
 
@@ -28,7 +29,7 @@ When operating in this codebase:
   - `hooks.py`: Universal lifecycle hooks dispatcher (`session-start`, `pre-compact`, `session-end`, `pre-commit`, `post-commit`).
   - `promote.py`: Automated high-signal batch prompter L1 -> L2 (`--auto`).
   - `bootstrap.py`: Zero-touch cold-start memory seeder from Git history & README (`agi-memory bootstrap`).
-  - `mcp_server.py`: Model Context Protocol server exposing 15 tools (`memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, `code_index`) and developer observability CLI.
+  - `mcp_server.py`: Model Context Protocol server exposing 16 tools (`memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `memory_session_outcome`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, `code_index`) and developer observability CLI.
   - `analyze.py`: Deterministic project analysis (stack, commands, layout, schema surfaces, CI) exposed as `agi-memory analyze [--json]`.
   - `init_command.py`: Emits the `/agi-init` slash command in every assistant's native format (Claude/Cursor/OpenCode/Codex MD, Gemini TOML, Windsurf/Cline workflows, Hermes SKILL.md).
   - `integrate.py`: Automated multi-assistant installer, cold-start seeder (`agi-integrate bootstrap`), hook integrator (`agi-integrate hooks`), and project wiring (`agi-integrate init`).

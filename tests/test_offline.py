@@ -1240,6 +1240,36 @@ with tempfile.TemporaryDirectory() as boot_tmp:
     tl_str = EpisodicLayer.format_timeline(timeline)
     assert sid in tl_str
 
+    # 4b. Session outcome: an unmarked session must NOT read as finished work,
+    # and an abandoned one must never be recapped as something to continue.
+    # Regression for backlog #9 (abandoned sessions came back as open tasks).
+    assert ended["outcome"] == "unknown", "an unmarked session must not be reported as completed"
+    assert "unknown" in recap_str
+    assert "Confirm before continuing" in recap_str
+
+    ep.set_outcome("abandoned", session_id=sid, project="sample-agent-app")
+    abandoned = ep.get_session(sid)
+    assert abandoned["outcome"] == "abandoned"
+    ab_recap = EpisodicLayer.format_recap(abandoned)
+    assert "abandoned" in ab_recap
+    assert "Do not resume without asking" in ab_recap
+    assert "Do not resume without asking" in EpisodicLayer.format_timeline([abandoned])
+
+    # end_session must not overwrite a recorded outcome with success
+    ep.end_session(sid, summary="stopped", project="sample-agent-app", cwd=t_path)
+    assert ep.get_session(sid)["outcome"] == "abandoned"
+
+    out = mcp_server.call_tool("memory_session_outcome",
+                               {"outcome": "completed", "session_id": sid,
+                                "project": "sample-agent-app"})
+    assert sid in out and "completed" in out
+    assert ep.get_session(sid)["outcome"] == "completed"
+    assert "Do not resume" not in EpisodicLayer.format_recap(ep.get_session(sid))
+    bad = mcp_server.call_tool("memory_session_outcome",
+                               {"outcome": "great", "session_id": sid,
+                                "project": "sample-agent-app"})
+    assert bad.startswith("Error:"), bad
+
     # 5. Search episodic
     ep_hits = ep.search("code graph", limit=5)
     assert len(ep_hits) == 1
@@ -1404,7 +1434,7 @@ with tempfile.TemporaryDirectory() as doc_tmp:
 
     # 15b. Tool parity: all 15 MCP tools registered in mcp_server must be documented
     registered_tools = {t["name"] for t in mcp_server.TOOLS}
-    assert len(registered_tools) == 15, f"Expected 15 tools in mcp_server, found {len(registered_tools)}"
+    assert len(registered_tools) == 16, f"Expected 16 tools in mcp_server, found {len(registered_tools)}"
 
     # README is an index; the reference lives under docs/, so parity is checked
     # against the whole published doc set rather than one file.

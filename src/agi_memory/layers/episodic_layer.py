@@ -28,6 +28,26 @@ except ImportError:
         from layers.base import Hit, MemoryLayer
 
 
+# How a session ended, as distinct from whether it stopped. 'unknown' is the
+# default on purpose: a session nobody marked is not evidence of success, and
+# recording it as 'completed' is what let an abandoned session come back looking
+# like an open task with a running start.
+OUTCOMES = frozenset({"completed", "abandoned", "blocked", "superseded", "unknown"})
+
+# Outcomes a later session must not silently pick up where it left off.
+NOT_RESUMABLE = frozenset({"abandoned", "blocked", "superseded", "unknown"})
+
+_RESUME_WARNING = {
+    "abandoned": "**Do not resume without asking.** This work was dropped, not finished; "
+                 "the approach above may have been rejected.",
+    "blocked": "**Do not resume without asking.** This session was blocked; the blocker "
+               "may still stand.",
+    "superseded": "**Do not resume.** This work was replaced by a later approach.",
+    "unknown": "Outcome was never recorded, so this may be finished work, a dead end, or "
+               "a rejected approach. Confirm before continuing it.",
+}
+
+
 def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Optional[str]]:
     """Detect current git branch and commit HEAD hash."""
     root = Path(cwd) if cwd else Path.cwd()
@@ -130,9 +150,16 @@ class EpisodicLayer(MemoryLayer):
                 summary TEXT,
                 touched_files TEXT DEFAULT '[]',
                 commits TEXT DEFAULT '[]',
-                status TEXT DEFAULT 'active'
+                status TEXT DEFAULT 'active',
+                outcome TEXT DEFAULT 'unknown'
             )
         """)
+        # Added after the first release: sessions recorded before this migration
+        # get 'unknown', which is the honest reading -- nothing recorded how they
+        # ended, and defaulting them to 'completed' is the bug this column fixes.
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(episodic_sessions)")}
+        if "outcome" not in cols:
+            cur.execute("ALTER TABLE episodic_sessions ADD COLUMN outcome TEXT DEFAULT 'unknown'")
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_episodic_project_time
             ON episodic_sessions(project, started_at DESC)
@@ -203,6 +230,36 @@ class EpisodicLayer(MemoryLayer):
             "status": row[7],
         }
 
+    def set_outcome(self, outcome: str, session_id: Optional[str] = None,
+                    project: Optional[str] = None) -> Optional[str]:
+        """Record how a session went, on the session itself.
+
+        Separate from end_session because the caller who knows the outcome (the
+        agent, mid-session) is not the caller who ends it (a lifecycle hook that
+        knows nothing). Returns the session id it marked, or None.
+        """
+        oc = (outcome or "").strip().lower()
+        if oc not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {outcome!r}")
+        proj = project or self.project or "global"
+        con = self._get_con()
+        cur = con.cursor()
+        sid = session_id
+        if not sid:
+            cur.execute("""
+                SELECT session_id FROM episodic_sessions
+                WHERE project = ? ORDER BY started_at DESC, id DESC LIMIT 1
+            """, (proj,))
+            row = cur.fetchone()
+            sid = row[0] if row else None
+        if not sid:
+            con.close()
+            return None
+        cur.execute("UPDATE episodic_sessions SET outcome = ? WHERE session_id = ?", (oc, sid))
+        con.commit()
+        con.close()
+        return sid
+
     def end_session(
         self,
         session_id: Optional[str] = None,
@@ -210,9 +267,18 @@ class EpisodicLayer(MemoryLayer):
         touched_files: Optional[List[str]] = None,
         commits: Optional[List[str]] = None,
         project: Optional[str] = None,
-        cwd: Path | str | None = None
+        cwd: Path | str | None = None,
+        outcome: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Mark session as ended, compute duration, and record touched files."""
+        """Mark session as ended, compute duration, and record touched files.
+
+        `outcome` overrides whatever set_outcome recorded. Left None, the stored
+        outcome stands -- and an unmarked session stays 'unknown' rather than
+        being promoted to 'completed' just because it stopped.
+        """
+        oc = (outcome or "").strip().lower() or None
+        if oc is not None and oc not in OUTCOMES:
+            raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, got {outcome!r}")
         proj = project or self.project or "global"
         con = self._get_con()
         cur = con.cursor()
@@ -275,14 +341,16 @@ class EpisodicLayer(MemoryLayer):
                 touched_files = ?,
                 commits = ?,
                 git_head_after = coalesce(?, git_head_after),
-                status = 'completed'
+                status = 'completed',
+                outcome = CASE WHEN ? IS NOT NULL THEN ? ELSE outcome END
             WHERE session_id = ?
-        """, (summary, summary, json.dumps(sorted(list(existing_files))), json.dumps(existing_commits), cur_head, sid))
+        """, (summary, summary, json.dumps(sorted(list(existing_files))), json.dumps(existing_commits),
+              cur_head, oc, oc, sid))
         con.commit()
 
         cur.execute("""
             SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status
+                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
             FROM episodic_sessions WHERE session_id = ?
         """, (sid,))
         final_row = cur.fetchone()
@@ -306,6 +374,7 @@ class EpisodicLayer(MemoryLayer):
             "touched_files": json.loads(final_row[11] or "[]"),
             "commits": json.loads(final_row[12] or "[]"),
             "status": final_row[13],
+            "outcome": final_row[14] or "unknown",
         }
 
     def record_event(
@@ -379,7 +448,7 @@ class EpisodicLayer(MemoryLayer):
         if proj:
             cur.execute("""
                 SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status
+                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
                 FROM episodic_sessions
                 WHERE project = ?
                 ORDER BY started_at DESC, id DESC
@@ -388,7 +457,7 @@ class EpisodicLayer(MemoryLayer):
         else:
             cur.execute("""
                 SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status
+                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
                 FROM episodic_sessions
                 ORDER BY started_at DESC, id DESC
                 LIMIT ?
@@ -414,6 +483,7 @@ class EpisodicLayer(MemoryLayer):
                 "touched_files": json.loads(r[11] or "[]"),
                 "commits": json.loads(r[12] or "[]"),
                 "status": r[13],
+                "outcome": r[14] or "unknown",
             })
         return results
 
@@ -428,7 +498,7 @@ class EpisodicLayer(MemoryLayer):
         cur = con.cursor()
         cur.execute("""
             SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status
+                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
             FROM episodic_sessions WHERE session_id = ?
         """, (session_id,))
         row = cur.fetchone()
@@ -470,6 +540,7 @@ class EpisodicLayer(MemoryLayer):
             "touched_files": json.loads(row[11] or "[]"),
             "commits": json.loads(row[12] or "[]"),
             "status": row[13],
+            "outcome": row[14] or "unknown",
             "events": events
         }
 
@@ -554,8 +625,11 @@ class EpisodicLayer(MemoryLayer):
             dur = f"{s['duration_seconds']:.0f}s" if s['duration_seconds'] < 60 else f"{s['duration_seconds']/60:.1f}m"
             branch_info = f" [{s['git_branch']} @ {s['git_head_after'] or s['git_head_before']}]" if s.get("git_branch") else ""
             status = s.get("status", "completed")
+            outcome = (s.get("outcome") or "unknown").lower()
 
-            lines.append(f"### Session `{sid}` ({proj}) - {status} ({dur}){branch_info}")
+            lines.append(f"### Session `{sid}` ({proj}) - {status}, outcome: {outcome} ({dur}){branch_info}")
+            if outcome in NOT_RESUMABLE:
+                lines.append(f"- {_RESUME_WARNING[outcome]}")
             if s.get("goal"):
                 lines.append(f"- **Goal**: {s['goal']}")
             if s.get("summary"):
@@ -585,4 +659,10 @@ class EpisodicLayer(MemoryLayer):
         commits = session.get("commits") or []
         cm_str = f" [Commit: {', '.join(commits[:2])}]" if commits else ""
 
-        return f"**Last Session (`{sid}`)**: {goal} -> {summary}{tf_str}{cm_str}"
+        # Outcome leads. A reader who stops after the first four words must not
+        # come away thinking an abandoned session is the task to continue.
+        outcome = (session.get("outcome") or "unknown").lower()
+        line = f"**Last Session (`{sid}`, {outcome})**: {goal} -> {summary}{tf_str}{cm_str}"
+        if outcome in NOT_RESUMABLE:
+            line += f"\n- {_RESUME_WARNING[outcome]}"
+        return line

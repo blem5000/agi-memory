@@ -85,14 +85,24 @@ Episodic memory timeline: retrieves recent agent session history, touched files,
   - `session_id` (string, optional): Specific session ID to inspect in detail.
 - **Returns**: Formatted session timeline and summaries.
 
-### 11. `code_structure`
+### 11. `memory_session_outcome`
+Records how a session ended, so a later session does not read dropped or rejected work as an open task.
+- **Parameters**:
+  - `outcome` (string, required): One of `completed`, `abandoned`, `blocked`, `superseded`.
+  - `project` (string, optional): Project filter.
+  - `session_id` (string, optional): Session to mark (default: most recent).
+- **Returns**: Confirmation naming the session marked.
+- **Note**: A session nobody marks stays `unknown`. Recap and timeline render the outcome
+  first and warn against resuming anything not marked `completed`.
+
+### 12. `code_structure`
 Structural code graph outline: lists classes, functions, methods, imports, and exports for a file or directory.
 - **Parameters**:
   - `path` (string, required): File or directory path to inspect.
   - `project` (string, optional): Project name.
 - **Returns**: Hierarchical symbol structure and line ranges.
 
-### 12. `code_callers`
+### 13. `code_callers`
 Inbound call graph traversal: finds callers and inbound references to a function, method, or class.
 - **Parameters**:
   - `symbol` (string, required): Function, method, or class name to find callers for.
@@ -100,7 +110,7 @@ Inbound call graph traversal: finds callers and inbound references to a function
   - `max_depth` (integer, default: 3): Maximum recursive call graph traversal depth.
 - **Returns**: Ranked inbound caller hierarchy and call sites.
 
-### 13. `code_dependencies`
+### 14. `code_dependencies`
 Outbound dependency graph: finds outbound function calls, class instantiations, and module imports.
 - **Parameters**:
   - `symbol` (string, required): Symbol name to find outbound dependencies for.
@@ -108,7 +118,7 @@ Outbound dependency graph: finds outbound function calls, class instantiations, 
   - `max_depth` (integer, default: 3): Maximum recursive dependency traversal depth.
 - **Returns**: Ranked outbound dependency paths.
 
-### 14. `code_impact`
+### 15. `code_impact`
 Blast-radius impact analysis: evaluates affected upstream symbols and files if a target symbol or file is changed or refactored.
 - **Parameters**:
   - `target` (string, required): Target symbol or file path to analyze.
@@ -116,7 +126,7 @@ Blast-radius impact analysis: evaluates affected upstream symbols and files if a
   - `max_depth` (integer, default: 3): Maximum traversal depth.
 - **Returns**: Risk level (LOW/MEDIUM/HIGH), impacted file and symbol counts, and upstream dependency paths.
 
-### 15. `code_index`
+### 16. `code_index`
 Indexes a file or directory into the structural code graph (AST + streaming regex parser with incremental sha256 cache).
 - **Parameters**:
   - `path` (string, default: `"."`): File or directory path to index.
@@ -127,6 +137,7 @@ Indexes a file or directory into the structural code graph (AST + streaming rege
 
 Direct command-line interface for human developers to audit and curate memories without a SQLite shell:
 
+- `agi-memory outcome <completed|abandoned|blocked|superseded>`: Record how this session ended.
 - `agi-memory log [--limit 20] [--project PROJ] [--all]`: List recent observations in a tabular format.
 - `agi-memory inspect <id>`: View full details, facts, narrative, and concepts of observation #`<id>`.
 - `agi-memory delete <id> [--hard]`: Soft-delete (mark superseded) or permanently purge an observation.

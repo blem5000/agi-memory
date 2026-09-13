@@ -11,5 +11,5 @@ Expected outcome:
 - Unit & layer tests: 0 errors (all 14 test suites passing)
 - L1 Score: 10/10 (100%), latency < 2ms
 - L2 Score: 6/6 (100%), latency < 0.5ms
-- MCP Handshake: 15/15 tools registered
+- MCP Handshake: 16/16 tools registered
 - Stress test: All 12 evaluation tiers passing (>500 QPS peak throughput)

@@ -30,7 +30,7 @@ on any miss, so CI fails on an accuracy regression.
 # Unit & layer tests, doc parity, tool registration
 python3 tests/test_offline.py
 
-# Verify stdio MCP server protocol handshake across all 15 tools
+# Verify stdio MCP server protocol handshake across all 16 tools
 agi-integrate test
 
 # Two machines syncing one vault, driven through the real CLI in isolated

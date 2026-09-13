@@ -111,6 +111,15 @@ TOOLS = [
                                     "limit": {"type": "integer", "default": 5, "description": "Max sessions to return"},
                                     "session_id": {"type": "string", "description": "Specific session ID to inspect"}},
                      "required": []}},
+    {"name": "memory_session_outcome",
+     "description": "Record how the current session ended so a later session does not mistake dropped or rejected work for an open task. Call this when work is abandoned, blocked, superseded, or genuinely completed.",
+     "inputSchema": {"type": "object",
+                     "properties": {"outcome": {"type": "string",
+                                                "enum": ["completed", "abandoned", "blocked", "superseded"],
+                                                "description": "completed = finished; abandoned = dropped or the approach was rejected; blocked = stopped by an external blocker; superseded = replaced by a later approach"},
+                                    "project": {"type": "string", "description": "Optional project name override"},
+                                    "session_id": {"type": "string", "description": "Session to mark (default: most recent)"}},
+                     "required": ["outcome"]}},
     {"name": "code_structure",
      "description": "Get structural outline of classes, functions, methods, and types in a file or directory (structural code graph).",
      "inputSchema": {"type": "object",
@@ -399,6 +408,20 @@ def call_tool(name, args):
             return out
         sessions = ep.get_timeline(project=project, limit=limit)
         return EpisodicLayer.format_timeline(sessions)
+    if name == "memory_session_outcome":
+        try:
+            from agi_memory.layers.episodic_layer import EpisodicLayer
+        except ImportError:
+            from layers.episodic_layer import EpisodicLayer
+        ep = EpisodicLayer(project=project)
+        try:
+            marked = ep.set_outcome(args.get("outcome", ""), session_id=args.get("session_id"),
+                                    project=project)
+        except ValueError as e:
+            return f"Error: {e}"
+        if not marked:
+            return "No session found to mark."
+        return f"Session '{marked}' recorded as {args.get('outcome')}."
     if name == "code_structure":
         try:
             from agi_memory.layers.code_layer import CodeLayer
@@ -716,6 +739,18 @@ def cmd_timeline(argv: list[str]) -> None:
     print(res)
 
 
+def cmd_outcome(argv: list[str]) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="agi-memory outcome",
+                                     description="Record how the current session ended")
+    parser.add_argument("outcome", choices=["completed", "abandoned", "blocked", "superseded"])
+    parser.add_argument("--project", "-p", default=None, help="Project filter")
+    parser.add_argument("--session", "-s", default=None, help="Session ID (default: most recent)")
+    args = parser.parse_args(argv)
+    print(call_tool("memory_session_outcome", {"outcome": args.outcome, "project": args.project,
+                                               "session_id": args.session}))
+
+
 def cmd_structure(argv: list[str]) -> None:
     import argparse
     parser = argparse.ArgumentParser(prog="agi-memory structure", description="Outline code structure & symbols")
@@ -847,6 +882,9 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "timeline":
             cmd_timeline(argv[1:])
             return
+        elif cmd == "outcome":
+            cmd_outcome(argv[1:])
+            return
         elif cmd == "structure":
             cmd_structure(argv[1:])
             return
@@ -871,6 +909,8 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory                           Start MCP stdio server")
             print("  agi-memory bootstrap [--repo .]      Bootstrap initial memories from Git & README")
             print("  agi-memory timeline [--limit 5]      Inspect past session timelines and recaps")
+            print("  agi-memory outcome <completed|abandoned|blocked|superseded>")
+            print("                                       Record how this session ended")
             print("  agi-memory structure [path]          Show hierarchical symbol structure")
             print("  agi-memory callers <symbol>          Find inbound callers & references across codebase")
             print("  agi-memory dependencies <symbol>     Find outbound dependencies & calls")
