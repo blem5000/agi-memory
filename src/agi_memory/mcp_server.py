@@ -194,7 +194,24 @@ def _core_text(blocks):
 def call_tool(name, args):
     project = args.get("project")
     limit = int(args.get("limit", 5) or 5)
-    l1 = SessionLayer(project=project)
+    def _canonicalize(term: str) -> str:
+        """Resolve a term through the L2 alias table. Injected into L1 so the
+        layers stay decoupled; failures degrade to returning the term as-is.
+
+        The import is local because GraphLayer is imported lazily further down
+        this function -- referencing the module-level name here silently raised
+        NameError into the except clause and disabled canonicalization entirely.
+        """
+        try:
+            try:
+                from agi_memory.layers.graph_layer import GraphLayer as _GL
+            except ImportError:
+                from layers.graph_layer import GraphLayer as _GL
+            return _GL().resolve_node(term)
+        except Exception:
+            return term
+
+    l1 = SessionLayer(project=project, term_resolver=_canonicalize)
     if name == "memory_recall":
         query = str(args.get("query", "")).strip()
         if not query:

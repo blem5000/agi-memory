@@ -87,18 +87,61 @@ def _fts_needs_rebuild(con: sqlite3.Connection, tokenize: str) -> bool:
     return f"tokenize='{tokenize}'" not in row[0]
 
 
+# Maps a written term to its canonical form; supplied by the caller so that
+# L1 stays independent of the L2 alias table that backs it.
+TermResolver = Callable[[str], str]
+
+
 class SessionLayer(MemoryLayer):
     name = "session"
 
     def __init__(self, worker: str | None = None, project: str | None = None,
                  db_path: Path | str | None = None,
-                 on_record: OnRecordCallback | None = None):
+                 on_record: OnRecordCallback | None = None,
+                 term_resolver: TermResolver | None = None):
         self.worker = worker
         self.project = project
         self.db_path = Path(db_path) if db_path else get_default_db()
         self.on_record = on_record
+        # Optional canonicalizer, injected rather than imported: L1 must not
+        # depend on L2. Supplied by the MCP server, which owns both layers.
+        self.term_resolver = term_resolver
         self._migrate_fts_if_needed()
 
+
+    def _canonical_terms(self, *texts: str) -> list:
+        """Canonical forms of any aliased terms in the text.
+
+        Stored with the memory so a later search for the canonical word finds
+        it even though the agent wrote a synonym. Doing this at write time is
+        far cheaper than repairing vocabulary at read time, and it is the only
+        route to synonym recall that does not require embeddings.
+        """
+        if not self.term_resolver:
+            return []
+        seen, out = set(), []
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", " ".join(t or "" for t in texts)):
+            low = token.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            try:
+                canon = self.term_resolver(token)
+            except Exception:
+                continue
+            if canon and canon.strip().lower() != low and len(out) < 12:
+                out.append(canon.strip())
+        return out
+
+    def _has_observations_table(self) -> bool:
+        try:
+            con = open_db(self.db_path, readonly=True)
+            row = con.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                              "AND name='observations'").fetchone()
+            con.close()
+            return row is not None
+        except sqlite3.Error:
+            return False
 
     def count_observations(self, project: str | None = None) -> int:
         """How many memories exist in scope. Lets a caller tell an empty store
@@ -316,8 +359,12 @@ class SessionLayer(MemoryLayer):
         tit = title or (text[:60].strip() + ("..." if len(text) > 60 else ""))
         cat = (category or "decision").strip().lower()
 
-        # Direct SQLite insertion (self-bootstraps schema if needed)
-        if not self.db_path.exists():
+        # Direct SQLite insertion (self-bootstraps schema if needed).
+        # The file existing does NOT imply L1's tables exist: a peer layer
+        # (graph, episodic, code) sharing the same database creates the file
+        # first, and record() then crashed with "no such table: observations".
+        # _init_db is idempotent, so run it whenever the table is absent.
+        if not self.db_path.exists() or not self._has_observations_table():
             self._init_db(self.db_path)
         else:
             try:
@@ -387,7 +434,8 @@ class SessionLayer(MemoryLayer):
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id, proj, cat, tit, "Recorded via agent-memory",
-            json.dumps([text]), text, json.dumps([cat, "pattern"]),
+            json.dumps([text]), text,
+            json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
             "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1"
         ))
         obs_id = cur.lastrowid
@@ -444,7 +492,7 @@ class SessionLayer(MemoryLayer):
             "subtitle": "Recorded via agent-memory",
             "facts": json.dumps([text]),
             "narrative": text,
-            "concepts": json.dumps([cat, "pattern"]),
+            "concepts": json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
             "files_read": "[]",
             "files_modified": "[]",
             "prompt_number": 1,

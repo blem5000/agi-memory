@@ -56,7 +56,7 @@ this fix stops being safe.
 
 ---
 
-## 2. No write-time normalization — CONFIRMED GAP
+## 2. No write-time normalization — DONE (2026-09-13)
 
 **Severity: medium.** The cheaper half of the retrieval problem is untouched.
 
@@ -97,7 +97,7 @@ seen is 3.45.1, and it needs 3.34+). Must degrade gracefully on older SQLite.
 
 ---
 
-## 4. Synonyms are out of reach lexically — DEFERRED BY DESIGN
+## 4. Synonyms are out of reach lexically — CLOSED, won't-fix by design
 
 Paraphrase recall is ~6% and no stemming, folding or trigram technique will
 move it: `login` -> `authentication` is semantic distance, not surface

@@ -207,6 +207,32 @@ assert _stem("deployment") != _stem("dependency"), "unrelated words collapsed"
 # stems that equal their source add nothing and are dropped
 assert "retry" not in _stems(["retry"]) or _stem("retry") != "retry"
 
+# Write-time canonicalization: a memory written with a synonym must be findable
+# by the canonical word. This is the only route to synonym recall that does not
+# require embeddings, and it costs nothing at read time.
+with tempfile.TemporaryDirectory() as tmp_dir:
+    from agi_memory.layers.session_layer import SessionLayer as _SLc
+    _cdb = Path(tmp_dir) / "canon.db"
+    _l1c = _SLc(project="canon", db_path=_cdb,
+                term_resolver=lambda t: "authentication" if t.lower() == "login" else t)
+    assert _l1c._canonical_terms("Login change", "the login flow") == ["authentication"]
+    _l1c.record("Moved the login flow to short-lived tokens.", title="Login change", project="canon")
+    assert _l1c.search("authentication", limit=3), "synonym not reachable via canonical term"
+    assert _l1c.search("login", limit=3), "original wording must still match"
+    # with no resolver injected, behaviour is unchanged
+    _plain = _SLc(project="canon2", db_path=Path(tmp_dir) / "plain.db")
+    assert _plain._canonical_terms("Login change", "the login flow") == []
+
+# A peer layer creating the shared database first must not break L1 writes.
+# record() assumed "file exists" meant "L1 tables exist" and raised
+# "no such table: observations".
+with tempfile.TemporaryDirectory() as tmp_dir:
+    from agi_memory.layers.graph_layer import GraphLayer as _GLp
+    _shared = Path(tmp_dir) / "shared.db"
+    _GLp(db_path=_shared).add("peer layer created this database first")
+    _res = _SLc(project="peer", db_path=_shared).record("still writable", project="peer")
+    assert _res.get("id"), f"record failed after a peer layer created the file: {_res}"
+
 # A miss must be legible. "(no hits)" let an agent read an empty result as
 # "no such decision exists" and re-decide something already settled.
 # Runs against an isolated store so it never depends on the developer's vault.
