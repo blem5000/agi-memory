@@ -396,3 +396,49 @@ local row id — the marker text carries over, the link does not.
 **Correction to make if this thread continues**: I told the commenter
 supersession was not surfaced. It partly is — the `[SUPERSEDED]` marker exists.
 What is missing is the pointer to the replacement and the rationale.
+
+---
+
+## 12. Destructive operations have no confirmation gate — OPEN (external offer)
+
+The maintainer of HOL Guard offered to add an agi-memory extension that would
+checkpoint `delete --hard`, `pin` and `unpin` while leaving `log`, `inspect`,
+`recall` and `blocks` automatic — a stop before an agent deletes or rewrites
+persistent memory, without slowing reads down.
+
+The split is right, and their list is missing the most dangerous operation.
+**`memory_sync` with `action=dedupe` rewrites the canonical append-only vault
+in place** and has already destroyed data once: the semantic dedupe keyed on a
+truncated 120-character prefix collapsed five distinct observations into one.
+It belongs above `delete --hard`.
+
+Also missing from their list: `memory_record` with `supersedes` (flips an
+existing record's type), and `memory_bootstrap` (bulk-writes from git history
+into a possibly non-empty store).
+
+**Checkpoint**: `memory_sync(dedupe)`, `delete --hard`, `memory_pin`,
+`memory_unpin`, `memory_record(supersedes=...)`, `memory_bootstrap`.
+**Automatic**: every read, plus plain `memory_record`, `memory_promote` and
+`code_index` — all additive.
+
+**What we should offer regardless of whether the integration happens**: a
+`destructive: true` annotation in the tool schema. Without it Guard has to
+hardcode our tool names and goes silently stale the next time we add one — as
+this release just did, adding `memory_session_outcome`.
+
+---
+
+## 13. Dedupe merging distinct memories — ALREADY FIXED, verified 2026-09-14
+
+Opened while reviewing item 12, then closed by reading the code rather than
+assuming the incident still stood. `deduplicate_and_compact` in
+`src/agi_memory/vault.py` hashes the **full** normalized text into the semantic
+key, with a comment saying why a prefix is unsafe, and
+`t_compaction_preserves_distinct` in `tests/chaos_test.py` already feeds it five
+observations sharing a long preamble with different endings and asserts all five
+survive, alongside three true duplicates that must collapse to one.
+
+Recorded here because item 12 cites the original incident: the operation is
+still the most destructive one in the system and still deserves a confirmation
+gate, but the specific defect that caused the data loss is gone and tested.
+
