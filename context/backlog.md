@@ -275,8 +275,7 @@ A rejected design, a reverted change and a shipped feature all recap the same.
   defaulting to unknown rather than to success.
 - Recap should render outcome first and never present an abandoned session as
   continuable — ideally "we tried X and stopped, do not resume without asking".
-- Related to item 8's finding about decisions arriving as settled context: both
-  are the same root problem, that memory is injected as fact rather than as
+- Same root problem as item 11: memory is injected as fact rather than as
   something with provenance and a status.
 
 ---
@@ -311,3 +310,48 @@ covering Claude Code / Cursor / Codex / Antigravity.
 zero-dependency, multi-machine, plus the code graph. Someone already using
 projectmem has little reason to switch, so the audience is people who have
 found neither.
+
+---
+
+## 11. Decisions arrive as settled context, with no rationale — OPEN (reported externally)
+
+Raised by a commenter running a multi-role Claude Code setup: carrying
+decisions forward is useful right up until the decision was wrong. After that
+every later session inherits it and none re-examine it, because it arrives as
+settled context rather than as something somebody argued for.
+
+**What exists** (verified, and better than first assumed):
+- `supersedes` links a decision to the one it overrides.
+- A superseded record is rendered with a `[SUPERSEDED]` marker in recall, so a
+  reader can at least see it is dead.
+- L2 edges are bi-temporal (`is_active`, `valid_from`, `valid_until`,
+  `superseded_by`), so a fact can be invalidated rather than deleted.
+- Recording something similar to an existing memory returns the conflicts, so
+  an agent can see it is contradicting itself.
+
+**What does not exist:**
+- **No rationale field.** `memory_record` takes text, title, category,
+  supersedes, relations. The "why" survives only if the agent happens to write
+  it into the prose, and nothing asks it to. Usually absent.
+- **No forward pointer.** `observations` has no `superseded_by` column — only
+  `type` flips to `superseded`. A reader sees "this is dead" and has no way to
+  reach what replaced it. The L2 edge table has this; L1 does not.
+- **No confidence or constraint capture.** Nothing records what a decision
+  depended on, so nothing can flag when those conditions no longer hold.
+
+**The deeper problem, which a field would not fix**: even with a rationale
+stored, it returns as prose in a retrieved block, indistinguishable in tone
+from a fact. Nothing marks "argued for under these constraints, which may no
+longer hold". A wrong decision with good reasoning attached still reads as
+settled. Same root cause as item 9 — outcomes and status are not part of how
+memory is presented, only of how it is stored.
+
+**Proposed first steps** (cheap, do not solve the framing problem):
+- Add `superseded_by` to `observations` and render "superseded by #N" in recall
+  so the chain is walkable.
+- Add an optional `rationale` field to `memory_record`, and mention it in the
+  memory-discipline rules so agents populate it.
+
+**Correction to make if this thread continues**: I told the commenter
+supersession was not surfaced. It partly is — the `[SUPERSEDED]` marker exists.
+What is missing is the pointer to the replacement and the rationale.
