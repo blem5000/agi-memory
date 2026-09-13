@@ -123,9 +123,35 @@ still gets nothing. Coverage of the alias table is the real open question, and
 nobody has measured it. Treat this as OPEN with a partial mitigation, not
 solved.
 
-**Next step if picked up**: measure alias-table coverage against terms that
-actually appear in recorded memories, rather than assuming the table is
-populated.
+**Measured (2026-09-14, `tests/alias_coverage.py`)** against the real vault on
+the maintainer's machine — 16,373 distinct terms across 712,691 occurrences:
+
+| | covered by the alias table |
+|---|---|
+| distinct terms | 14 / 16,373 = **0.1%** |
+| weighted by frequency | 3,933 / 712,691 = **0.6%** |
+
+The 14 are exactly the entries in `STANDARD_ALIASES`. **Nothing has ever been
+added to the table in real use**, so the write-time canonicalization booked as
+item 2's mitigation is, in practice, inert: it fires only on `fcm`, `k8s`,
+`jwt`, `sqlite`, `postgres`, `auth`, `ts`, `py`, `mcp`, `db`, `api`, `ui`, `ci`
+and `postgresql`.
+
+**Read the number carefully.** It is not "99.9% of queries fail" — most terms
+have no synonym and need no alias entry. What it establishes is narrower and
+still damning: the table is seed-only. Frequent, obviously aliasable terms in
+this corpus (`flutter`/`dart`, `widget`/`screen`, `theme`/`brand`,
+`configuration`/`config`, `migration`) have no entry, and no mechanism exists
+that would ever create one.
+
+**Consequence for item 2**: it should not be read as having closed anything for
+synonyms. The mechanism works; the data behind it is empty.
+
+**Next step if picked up**: the gap is population, not machinery. Either mine
+alias candidates from the corpus (co-occurring terms that never appear in the
+same memory are a poor signal; terms an agent used interchangeably across
+sessions are a better one) or accept that the table only ever holds what a
+human curates, and say so in the README rather than implying synonym support.
 
 ---
 
