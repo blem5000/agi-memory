@@ -174,9 +174,29 @@ def main() -> int:
         check(f"desktop sync does not report a conflict (status={s2b.get('status')})",
               lambda: s2b.get("status") not in ("pull_conflict", "push_rejected"))
 
-        # let both settle
-        m1.sync()
-        m2.sync()
+        # Let both settle. One round is not enough to guarantee the REMOTE holds
+        # everything: each machine pushes only what it had at pull time, so the
+        # last writer's records reach the remote a round later. Loop until the
+        # remote is stable rather than assuming a fixed number of rounds --
+        # asserting on remote state after a fixed two syncs was flaky on CI.
+        def remote_record_count() -> int:
+            probe = root / f"probe-{os.getpid()}"
+            shutil.rmtree(probe, ignore_errors=True)
+            subprocess.run(["git", "clone", "-q", str(remote), str(probe)],
+                           capture_output=True, timeout=60)
+            n = 0
+            for f in probe.glob("*.jsonl"):
+                for line in f.read_text(encoding="utf-8").splitlines():
+                    if any(k in line for k in ("SQLite FTS5", "backoff", "rolling updates")):
+                        n += 1
+            shutil.rmtree(probe, ignore_errors=True)
+            return n
+
+        for _ in range(4):
+            m1.sync()
+            m2.sync()
+            if remote_record_count() >= 3:
+                break
 
         t1, t2 = m1.texts(), m2.texts()
         check("laptop holds the desktop's memory",
