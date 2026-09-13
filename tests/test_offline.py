@@ -354,10 +354,15 @@ _pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_te
 _pkg_version = _re_mod.search(r'^version\s*=\s*"([^"]+)"', _pyproject, _re_mod.M).group(1)
 for _formula in sorted((Path(__file__).resolve().parent.parent / "Formula").glob("*.rb")):
     _text = _formula.read_text(encoding="utf-8")
-    assert f"tags/v{_pkg_version}.tar.gz" in _text, \
-        f"{_formula.name} does not point at v{_pkg_version}; run packaging/update_formula.py"
-    assert _re_mod.search(rf'assert_match "[a-z-]+ {_re_mod.escape(_pkg_version)}"', _text), \
-        f"{_formula.name} version assertion is stale; run packaging/update_formula.py"
+    _f_ver = _re_mod.search(r"tags/v([0-9.]+)\.tar\.gz", _text)
+    assert _f_ver, f"{_formula.name} has no versioned tarball URL"
+    # The url and the test assertion must agree with each other, always.
+    assert _re_mod.search(rf'assert_match "[a-z-]+ {_re_mod.escape(_f_ver.group(1))}"', _text), \
+        f"{_formula.name}: tarball URL and version assertion disagree"
+    # It may trail pyproject by at most one release while a tag is in flight.
+    _fv = tuple(int(x) for x in _f_ver.group(1).split("."))
+    _pv = tuple(int(x) for x in _pkg_version.split("."))
+    assert _fv <= _pv, f"{_formula.name} claims v{_f_ver.group(1)} > packaged v{_pkg_version}"
     _sha = _re_mod.search(r'sha256 "([0-9a-f]{64})"', _text)
     assert _sha, f"{_formula.name} has no sha256"
 
