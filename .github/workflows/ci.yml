@@ -57,6 +57,10 @@ jobs:
           python tests/eval_l4.py
           python tests/eval_fuzzy.py
 
+      - name: Run two-machine sync test
+        run: |
+          python tests/multi_machine_test.py
+
       - name: Run adversarial robustness suite
         run: |
           python tests/chaos_test.py

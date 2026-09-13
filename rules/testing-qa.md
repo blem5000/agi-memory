@@ -4,7 +4,7 @@ All verification runs 100% offline without API keys, network access, or external
 
 ## Required Verification Checklist
 
-Before committing or pushing any code changes, all 7 test suites must pass:
+Before committing or pushing any code changes, all 8 test suites must pass:
 
 1. **Unit & Offline Integration Tests**:
    ```bash
@@ -61,7 +61,15 @@ Before committing or pushing any code changes, all 7 test suites must pass:
    - `code_impact`
    - `code_index`
 
-7. **Comprehensive 12-Tier Production Stress Test**:
+7. **Two-Machine Sync**:
+   ```bash
+   python3 tests/multi_machine_test.py
+   ```
+   Drives two isolated machines through record and sync against a shared
+   remote, asserting both converge and a third machine cloning fresh sees
+   everything. Verified to fail (4/11) without the union merge policy.
+
+8. **Comprehensive 12-Tier Production Stress Test**:
    ```bash
    python3 tests/stress_test.py
    ```

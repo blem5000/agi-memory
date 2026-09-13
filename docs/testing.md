@@ -33,6 +33,10 @@ python3 tests/test_offline.py
 # Verify stdio MCP server protocol handshake across all 15 tools
 agi-integrate test
 
+# Two machines syncing one vault, driven through the real CLI in isolated
+# environments (separate HOME, vault and database per machine)
+python3 tests/multi_machine_test.py
+
 # Adversarial robustness: corrupt databases, hostile input, concurrency
 python3 tests/chaos_test.py
 
@@ -47,6 +51,7 @@ python3 tests/test_offline.py \
   && python3 tests/eval_l1.py && python3 tests/eval_l2.py \
   && python3 tests/eval_l3.py && python3 tests/eval_l4.py \
   && agi-integrate test \
+  && python3 tests/multi_machine_test.py \
   && python3 tests/chaos_test.py && python3 tests/stress_test.py
 ```
 
