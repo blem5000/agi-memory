@@ -76,7 +76,7 @@ The alias machinery already exists in L2 (`GraphLayer.add_alias`).
 
 ---
 
-## 3. Internal-character typos still miss — OPEN, scoped smaller than believed
+## 3. Internal-character typos still miss — DONE (2026-09-13)
 
 "Typos" is not one category. Measured on the real vault (74 observations,
 written as real usage, not as test data):
@@ -90,10 +90,22 @@ The synthetic eval reports 11% for internal typos; the real vault says 10%, so
 the eval is representative here — this is a real gap, just a narrower one than
 "0/19 typos" suggested.
 
-**Proposed fix**: trigram index as a fallback, consulted only when exact and
-stemmed matching both return nothing. Viability already confirmed: every CI
-runner and the local machine support the `trigram` tokenizer (lowest SQLite
-seen is 3.45.1, and it needs 3.34+). Must degrade gracefully on older SQLite.
+**Fixed** with fragment-coverage matching rather than a trigram index. A
+second FTS table would have meant triggers, migrations and another thing to
+keep in sync for a case that is by definition rare; the fallback only runs
+after every other match failed, so it can afford a bounded scan instead.
+
+Query terms are split into overlapping 4-character fragments; a candidate must
+contain at least 50% of them. 0.5 is the knee — 0.45 buys no further recall.
+
+Results: synthetic eval 0% -> 26%; real vault internal-typo recall 10% -> 48%.
+
+**Known cost, accepted deliberately**: about 1 in 7 fallback hits is not the
+record the caller meant. These are therefore labelled "[approximate match —
+spelling differs]" and scored at 0.4, so an agent cannot mistake one for a
+confident recall. Short words (under 5 characters) yield too few fragments and
+remain unreachable — inherent, since one deleted character in a 5-letter word
+leaves almost nothing to match.
 
 ---
 

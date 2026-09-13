@@ -348,8 +348,87 @@ class SessionLayer(MemoryLayer):
                 args_pfx.append(limit)
                 rows = con.execute(sql_pfx, args_pfx).fetchall()
 
+        # Last resort: tolerate a typo INSIDE a word. Stemming repairs damage at
+        # the end of a word ("dependencie"); a character wrong in the middle
+        # ("dependncies") survives no tokenizer, and measured 10% recall on the
+        # real vault. Runs only when everything above found nothing, so it can
+        # never outrank a real match.
+        fuzzy = False
+        if not rows and tokens:
+            rows = self._typo_fallback(con, tokens, limit)
+            fuzzy = bool(rows)
+
         con.close()
-        return self._bodies_by_id([str(i) for (i,) in rows])
+        hits = self._bodies_by_id([str(i) for (i,) in rows])
+        if fuzzy:
+            # Measured on the real vault, roughly one in seven of these is not
+            # the record the caller meant. Labelling them keeps the agent from
+            # treating an approximate match as a confident one -- an unmarked
+            # wrong recall is worse than a miss, because it gets acted on.
+            for h in hits:
+                h.text = f"[approximate match — spelling differs] {h.text}"
+                h.score = min(getattr(h, "score", 1.0) or 1.0, 0.4)
+        return hits
+
+    # A fragment must be long enough to be evidence rather than noise, and a
+    # candidate must contain most of the query's fragments to be offered at all.
+    _TYPO_FRAGMENT = 4
+    _TYPO_MIN_COVERAGE = 0.5
+
+    @classmethod
+    def _fragments(cls, word: str) -> list:
+        """Overlapping fragments of a word. A single internal typo breaks only
+        the fragments spanning it, so most still match the intended word."""
+        w = word.lower()
+        n = cls._TYPO_FRAGMENT
+        return [w[i:i + n] for i in range(len(w) - n + 1)] if len(w) > n else []
+
+    def _typo_fallback(self, con, tokens: list, limit: int) -> list:
+        """Find records whose text mostly contains the query's fragments.
+
+        Deliberately not a second FTS index: this path only runs after every
+        other match failed, so it can afford a bounded scan, and a second index
+        would mean triggers, migrations and another thing to keep in sync for a
+        case that is by definition rare.
+        """
+        candidates = {}
+        for token in tokens:
+            frags = self._fragments(token)
+            if len(frags) < 3:
+                continue
+            # Longest fragments first: the most specific evidence available.
+            probes = sorted(set(frags), key=len, reverse=True)[:6]
+            for frag in probes:
+                sql = ("SELECT id, lower(title || ' ' || facts || ' ' || narrative) "
+                       "FROM observations WHERE type != 'superseded' AND ("
+                       "instr(lower(title), ?) > 0 OR instr(lower(facts), ?) > 0 "
+                       "OR instr(lower(narrative), ?) > 0)")
+                args = [frag, frag, frag]
+                if self.project in ("agi-memory", "agent-memory"):
+                    sql += " AND project IN ('agi-memory','agent-memory')"
+                elif self.project:
+                    sql += " AND project = ?"
+                    args.append(self.project)
+                sql += " LIMIT 200"
+                try:
+                    for row_id, blob in con.execute(sql, args).fetchall():
+                        candidates.setdefault(row_id, blob)
+                except sqlite3.Error:
+                    return []
+
+        if not candidates:
+            return []
+
+        all_frags = [f for t in tokens for f in self._fragments(t)]
+        if not all_frags:
+            return []
+        scored = []
+        for row_id, blob in candidates.items():
+            coverage = sum(1 for f in all_frags if f in blob) / len(all_frags)
+            if coverage >= self._TYPO_MIN_COVERAGE:
+                scored.append((coverage, row_id))
+        scored.sort(reverse=True)
+        return [(row_id,) for _, row_id in scored[:limit]]
 
     def record(self, text: str, title: str | None = None,
                project: str | None = None, metadata: dict | None = None,

@@ -207,6 +207,25 @@ assert _stem("deployment") != _stem("dependency"), "unrelated words collapsed"
 # stems that equal their source add nothing and are dropped
 assert "retry" not in _stems(["retry"]) or _stem("retry") != "retry"
 
+# Internal-character typos: stemming cannot repair damage in the middle of a
+# word, so a fragment-coverage fallback runs when everything else found nothing.
+with tempfile.TemporaryDirectory() as tmp_dir:
+    from agi_memory.layers.session_layer import SessionLayer as _SLt
+    _l1t = _SLt(project="typo", db_path=Path(tmp_dir) / "typo.db")
+    _l1t.record("Migrated authentication to short-lived JWT tokens.", title="Auth", project="typo")
+    _l1t.record("Containers are deployed to Kubernetes with rolling updates.",
+                title="Deploy", project="typo")
+    _exact = _l1t.search("authentication", limit=3)
+    assert _exact and "approximate match" not in _exact[0].text, \
+        "an exact match must never be labelled approximate"
+    _typo = _l1t.search("autentication", limit=3)
+    assert _typo, "internal-character typo not recovered"
+    assert "approximate match" in _typo[0].text, "fuzzy hits must be labelled as such"
+    assert _typo[0].score <= 0.4, "fuzzy hits must rank below exact ones"
+    # nonsense must still return nothing rather than the nearest thing
+    assert not _l1t.search("qqqzzzwwwvvv", limit=3), "fallback must not match arbitrary input"
+    assert _SLt._fragments("abc") == [], "short words yield no fragments"
+
 # Write-time canonicalization: a memory written with a synonym must be findable
 # by the canonical word. This is the only route to synonym recall that does not
 # require embeddings, and it costs nothing at read time.
