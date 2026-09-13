@@ -1452,6 +1452,22 @@ with tempfile.TemporaryDirectory() as doc_tmp:
     agents_md = (repo_root / "AGENTS.md").read_bytes()
     assert claude_md == agents_md, "CLAUDE.md and AGENTS.md must be 100% byte-for-byte identical!"
 
+    # Every tool must be classified as read-only, additive or destructive, so a
+    # caller gating destructive operations reads it off tools/list instead of
+    # hardcoding our tool names and going stale the next time one is added.
+    for _t in mcp_server.TOOLS:
+        ann = _t.get("annotations")
+        assert ann and "destructiveHint" in ann and "readOnlyHint" in ann, \
+            f"tool '{_t['name']}' carries no destructive/read-only annotation"
+        assert not (ann["readOnlyHint"] and ann["destructiveHint"]), _t["name"]
+    _dest = {t["name"] for t in mcp_server.TOOLS if t["annotations"]["destructiveHint"]}
+    assert "memory_sync" in _dest, "dedupe rewrites the canonical vault; it must be gated"
+    assert _dest >= {"memory_pin", "memory_unpin", "memory_bootstrap"}, _dest
+    for _ro in ("memory_recall", "memory_recall_deep", "memory_timeline", "code_impact"):
+        assert next(t for t in mcp_server.TOOLS if t["name"] == _ro)["annotations"]["readOnlyHint"], \
+            f"{_ro} is a read; gating it would slow every lookup down"
+
+
     # 15b. Tool parity: all 15 MCP tools registered in mcp_server must be documented
     registered_tools = {t["name"] for t in mcp_server.TOOLS}
     assert len(registered_tools) == 16, f"Expected 16 tools in mcp_server, found {len(registered_tools)}"

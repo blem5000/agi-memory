@@ -421,10 +421,20 @@ into a possibly non-empty store).
 **Automatic**: every read, plus plain `memory_record`, `memory_promote` and
 `code_index` — all additive.
 
-**What we should offer regardless of whether the integration happens**: a
-`destructive: true` annotation in the tool schema. Without it Guard has to
-hardcode our tool names and goes silently stale the next time we add one — as
-this release just did, adding `memory_session_outcome`.
+**Done (2026-09-14)**: every tool now carries MCP `annotations` with
+`readOnlyHint` and `destructiveHint`, travelling with `tools/list`, and a test
+fails if a tool is added without a classification. `memory_sync`, `memory_pin`,
+`memory_unpin` and `memory_bootstrap` are marked destructive.
+
+**Known limit**: annotations have no argument granularity. `memory_record` is
+marked additive despite `supersedes` mutating an existing record, because
+marking the most frequent write in the system destructive would put a prompt in
+front of every memory an agent saves, and agents would stop saving. Its
+description says a gate should key on the argument instead. Same shape applies
+to `memory_sync`, which is marked destructive on account of `action=dedupe`
+even though `action=sync` and `action=status` are harmless.
+
+**Still open**: replying to the offer and agreeing how Guard hooks in.
 
 ---
 

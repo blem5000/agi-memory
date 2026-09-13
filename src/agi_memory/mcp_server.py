@@ -57,7 +57,7 @@ TOOLS = [
                                     "category": {"type": "string", "enum": ["architecture", "pattern", "bugfix", "convention", "decision"],
                                                  "default": "decision", "description": "Category of the memory"},
                                     "project": {"type": "string", "description": "Target project name"},
-                                    "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory that this decision overrides/replaces"},
+                                    "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory that this decision overrides/replaces. This MUTATES the referenced memory: its type flips to superseded. A caller gating destructive operations should treat memory_record with this argument set as one."},
                                     "rationale": {"type": "string", "description": "Why this decision was made - the constraints and tradeoffs behind it. Record this whenever the reasoning would not be obvious to someone reading the decision alone; a future session cannot re-examine a decision it only knows the conclusion of."},
                                     "relations": {"type": "array",
                                                   "description": "Knowledge graph triples (source, relation, target) to store in L2 durable memory",
@@ -156,6 +156,43 @@ TOOLS = [
                                     "force": {"type": "boolean", "default": False, "description": "Force re-indexing ignoring file cache"}},
                      "required": []}},
 ]
+
+# Which tools change stored state, so a caller can gate them without hardcoding
+# our tool names. A wrapper that keeps its own list goes silently stale the next
+# time a tool is added here; these annotations travel with tools/list instead.
+#
+# memory_sync is marked destructive because action="dedupe" rewrites the
+# canonical append-only vault in place -- the only operation in the system that
+# does. The annotation is per-tool, so the riskiest action decides it.
+DESTRUCTIVE_TOOLS = frozenset({
+    "memory_sync",      # action="dedupe" rewrites the vault
+    "memory_pin",
+    "memory_unpin",
+    "memory_bootstrap",  # bulk-writes into a possibly non-empty store
+})
+
+# Additive writes: they create records but never rewrite or remove one.
+#
+# memory_record sits here despite one mutating case -- `supersedes` flips an
+# existing record's type. The annotation has no argument granularity, and
+# marking the most frequent write in the system destructive would put a prompt
+# in front of every memory an agent tries to save, which ends with agents not
+# saving any. A gate that wants the mutating case should key on the argument;
+# the tool description says so.
+WRITE_TOOLS = frozenset({
+    "memory_record",
+    "memory_promote",
+    "memory_session_outcome",
+    "code_index",
+})
+
+for _t in TOOLS:
+    _name = _t["name"]
+    _t["annotations"] = {
+        "readOnlyHint": _name not in DESTRUCTIVE_TOOLS and _name not in WRITE_TOOLS,
+        "destructiveHint": _name in DESTRUCTIVE_TOOLS,
+    }
+
 
 
 def _hits_text(hits):
