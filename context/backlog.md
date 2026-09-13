@@ -248,3 +248,66 @@ the promoted facts and search results are all gone.
 correct (it marks superseded rather than removing) but is undocumented. And
 tombstones are keyed on content_hash, so an identical memory recorded later
 gets the same guid and would be suppressed. Worth revisiting if anyone hits it.
+
+---
+
+## 9. Abandoned sessions come back as open tasks — CONFIRMED BUG (reported externally)
+
+**Severity: high.** Named by a commenter as "context poisoning", and they were
+right; nothing in the design addresses it.
+
+Scenario: a design session produces several rejected approaches, the user
+corrects the model repeatedly, and eventually drops the task. The next session
+starts fresh, is handed last-session context, and assumes the task is both
+still open and the thing to work on.
+
+**Verified**: `episodic_sessions.status` only takes `active` or `completed`.
+`end_session()` sets `completed` regardless of how it went, and the
+session-start hook injects "Last Session: <goal> -> <summary>". An abandoned
+session is therefore indistinguishable from a finished one, and reads as an
+open task with a running start.
+
+The failure generalises: we store *what happened* and never *how it ended*.
+A rejected design, a reverted change and a shipped feature all recap the same.
+
+**Proposed fix**:
+- An outcome on `end_session`: completed / abandoned / blocked / superseded,
+  defaulting to unknown rather than to success.
+- Recap should render outcome first and never present an abandoned session as
+  continuable — ideally "we tried X and stopped, do not resume without asking".
+- Related to item 8's finding about decisions arriving as settled context: both
+  are the same root problem, that memory is injected as fact rather than as
+  something with provenance and a status.
+
+---
+
+## 10. projectmem is a direct competitor — POSITIONING, not a defect
+
+https://github.com/riponcm/projectmem — 822 stars, Python, MIT.
+
+Same core bet: local-first, no embeddings, no vector database, append-only
+JSONL event log, MCP server, aimed at coding agents remembering decisions,
+covering Claude Code / Cursor / Codex / Antigravity.
+
+| | projectmem | agi-memory |
+|---|---|---|
+| Dependencies | Typer, watchdog, D3 | stdlib + SQLite only |
+| Search | plain-text over files | SQLite FTS5 |
+| Scope | per-repo `.projectmem/` | global vault, cross-project |
+| Cross-machine | not offered | git sync with union merge |
+| Code graph | `structure.json` | AST callers / dependencies / blast radius |
+| Assistants | 5 | 13 |
+| Adoption | 822 stars | 0 |
+
+**What they do better, worth learning from:**
+- Their pitch names the failure ("warns agents before repeating failed
+  approaches") rather than the category ("persistent memory").
+- They separate intent (`plan.md`) from memory (`events.jsonl`). We conflate
+  them, which is arguably why item 9 exists.
+- A pre-commit gate and file watcher accrue memory without the agent choosing
+  to record.
+
+**Implication**: stop implying nobody is doing this. The honest positioning is
+zero-dependency, multi-machine, plus the code graph. Someone already using
+projectmem has little reason to switch, so the audience is people who have
+found neither.
