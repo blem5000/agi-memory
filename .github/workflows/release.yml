@@ -43,8 +43,14 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      # Check the DEFAULT BRANCH, not the tag. A formula's checksum is the hash
+      # of the tag's own tarball, so it cannot exist in the commit being tagged
+      # -- it is necessarily committed afterwards. Verifying the tag would fail
+      # every release by construction and teach everyone to ignore this job.
       - uses: actions/checkout@v7
-      - name: Formula must match this tag's tarball
+        with:
+          ref: main
+      - name: Formula on main must match this tag's tarball
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
