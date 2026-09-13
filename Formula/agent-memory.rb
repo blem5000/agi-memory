@@ -3,8 +3,8 @@ class AgentMemory < Formula
 
   desc "Turnkey zero-dependency four-pillar cognitive memory framework for AI coding assistants"
   homepage "https://github.com/kdbhalala/agi-memory"
-  url "https://github.com/kdbhalala/agi-memory/archive/refs/tags/v0.4.0.tar.gz"
-  sha256 "dc10cfc20bf1e951b1dbf7d56dd63345216ef0f816d695a71f002658895633a3"
+  url "https://github.com/kdbhalala/agi-memory/archive/refs/tags/v0.5.0.tar.gz"
+  sha256 "794c7c8a2a627ef37fbbc148c461105d602a019f5b22b783eef77f398dd0f344"
   license "MIT"
   head "https://github.com/kdbhalala/agi-memory.git", branch: "main"
 
@@ -15,7 +15,7 @@ class AgentMemory < Formula
   end
 
   test do
-    assert_match "agent-memory 0.4.0", shell_output("#{bin}/agent-memory --version")
+    assert_match "agent-memory 0.5.0", shell_output("#{bin}/agent-memory --version")
     assert_match "Turnkey integration tool", shell_output("#{bin}/agent-integrate --help")
     assert_match "Recall from agent session", shell_output("#{bin}/agent-recall --help")
   end
