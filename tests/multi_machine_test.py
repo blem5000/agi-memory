@@ -179,23 +179,30 @@ def main() -> int:
         # last writer's records reach the remote a round later. Loop until the
         # remote is stable rather than assuming a fixed number of rounds --
         # asserting on remote state after a fixed two syncs was flaky on CI.
-        def remote_record_count() -> int:
+        MARKERS = ("SQLite FTS5", "backoff", "rolling updates")
+
+        def markers_on_remote() -> set:
+            """Which distinct memories the remote holds.
+
+            Counting matching LINES is wrong: union merge can legitimately
+            duplicate a line, so three matches may be two distinct memories.
+            That made the loop below exit early and the fresh-clone check fail.
+            """
             probe = root / f"probe-{os.getpid()}"
             shutil.rmtree(probe, ignore_errors=True)
             subprocess.run(["git", "clone", "-q", str(remote), str(probe)],
                            capture_output=True, timeout=60)
-            n = 0
+            found = set()
             for f in probe.glob("*.jsonl"):
-                for line in f.read_text(encoding="utf-8").splitlines():
-                    if any(k in line for k in ("SQLite FTS5", "backoff", "rolling updates")):
-                        n += 1
+                blob = f.read_text(encoding="utf-8")
+                found |= {m for m in MARKERS if m in blob}
             shutil.rmtree(probe, ignore_errors=True)
-            return n
+            return found
 
-        for _ in range(4):
+        for _ in range(5):
             m1.sync()
             m2.sync()
-            if remote_record_count() >= 3:
+            if markers_on_remote() == set(MARKERS):
                 break
 
         t1, t2 = m1.texts(), m2.texts()
@@ -224,9 +231,14 @@ def main() -> int:
         m3.home.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", "-q", str(remote), str(m3.vault)],
                        env=m3.env, capture_output=True)
+        def fresh_clone_sees_all():
+            blob = " ".join(m3.texts())
+            missing = [m for m in MARKERS if m not in blob]
+            if missing:
+                print(f"        missing from fresh clone: {missing}")
+            return not missing
         check("a fresh machine cloning the vault sees all three memories",
-              lambda: sum(1 for t in m3.texts()
-                          if "SQLite FTS5" in t or "backoff" in t or "rolling" in t) == 3)
+              fresh_clone_sees_all)
 
     print("=" * 58)
     passed = sum(1 for r in _results if r)
