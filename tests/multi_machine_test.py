@@ -136,7 +136,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         remote = root / "remote.git"
-        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        # -b main matters: without it the bare repo's HEAD points at an unborn
+        # "master", so every clone checks out an empty tree and the machines
+        # appear to have synced nothing. Local git defaulted to main and hid
+        # this; CI runners did not.
+        if subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(remote)],
+                          capture_output=True).returncode != 0:
+            subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+            subprocess.run(["git", "symbolic-ref", "HEAD", "refs/heads/main"],
+                           cwd=remote, check=True)
 
         m1 = Machine(root, "laptop", remote)
         m2 = Machine(root, "desktop", remote)
