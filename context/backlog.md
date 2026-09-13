@@ -213,3 +213,38 @@ Reviewed after all items were delivered. Findings:
   tuning is diminishing returns against getting any external user.
 - **The self-grading discount still applies** and does not appear anywhere in
   the reported numbers. Every eval was authored by the code's author.
+
+---
+
+## 8. Hard delete only deleted L1 — FIXED (2026-09-13, reported externally)
+
+**First bug report from someone other than the maintainer.** They asked whether
+`agi-memory delete <id> --hard` being L1-only was intentional. It was not, and
+checking made it worse than reported:
+
+1. `delete_observation(hard=True)` was a single `DELETE FROM observations`.
+2. Promotion copied `project, title, facts, concepts` and **not** the
+   observation id, so a promoted fact had no link back to its source — a
+   cascade was not merely unimplemented, it was inexpressible.
+3. The vault is append-only, so a hard-deleted record survived there and was
+   restored by the next `import_from_vault` or sync from another machine.
+
+So "hard delete" meant "delete from the L1 index" — wrong for anyone deleting
+something they need gone.
+
+**Fixed**: `graph_edges` gains a `source_ref` column (migrated in place) that
+records which observation promoted a fact; promotion carries `obs:<id>`;
+`GraphLayer.delete_by_source()` purges them; and the vault gained tombstones —
+themselves appends, so deletion propagates across machines like any other
+record. Import and export both honour them.
+
+`promote()` falls back to the older `add(text)` signature on TypeError, so a
+third-party L2 keeps working without cascade support.
+
+Verified end to end: after a hard delete and a vault re-import, the L1 row,
+the promoted facts and search results are all gone.
+
+**Still open**: a soft delete does not touch promoted facts, which is arguably
+correct (it marks superseded rather than removing) but is undocumented. And
+tombstones are keyed on content_hash, so an identical memory recorded later
+gets the same guid and would be suppressed. Worth revisiting if anyone hits it.

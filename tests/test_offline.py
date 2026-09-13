@@ -254,6 +254,41 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert not _l1t.search("qqqzzzwwwvvv", limit=3), "fallback must not match arbitrary input"
     assert _SLt._fragments("abc") == [], "short words yield no fragments"
 
+# A hard delete must reach everywhere the memory went. It used to delete only
+# the L1 row, leaving promoted facts in the graph and the record in the
+# append-only vault, from which the next import or sync restored it. For anyone
+# deleting something they need gone, that is the wrong behaviour.
+with tempfile.TemporaryDirectory() as tmp_dir:
+    from agi_memory.layers.session_layer import SessionLayer as _SLd
+    from agi_memory.layers.graph_layer import GraphLayer as _GLd
+    from agi_memory import vault as _vlt
+    _ddb = Path(tmp_dir) / "del.db"
+    _dvault = Path(tmp_dir) / "delvault"
+    _l1d = _SLd(project="delproj", db_path=_ddb)
+    _oid = _l1d.record("Rotation uses transit keys.", title="Rotation", project="delproj")["id"]
+    _row = _l1d.get_observation(_oid)
+    _guid = _row["content_hash"]
+    _vlt.append_observation_to_vault(_row, vault_dir=_dvault)
+    _l2d = _GLd(db_path=_ddb, project="delproj")
+    _l2d.add("[delproj] Rotation: uses transit keys", source_ref=f"obs:{_oid}")
+
+    _con = sqlite3.connect(_ddb)
+    assert _con.execute("SELECT count(*) FROM graph_edges WHERE source_ref=?",
+                        (f"obs:{_oid}",)).fetchone()[0] > 0, "provenance not recorded on promotion"
+
+    assert _l1d.delete_observation(_oid, hard=True)
+    assert _l2d.delete_by_source(f"obs:{_oid}") >= 0
+    assert _con.execute("SELECT count(*) FROM graph_edges WHERE source_ref=?",
+                        (f"obs:{_oid}",)).fetchone()[0] == 0, "promoted facts survived a hard delete"
+    assert _vlt.append_tombstone_to_vault(_guid, vault_dir=_dvault)
+    assert _guid in _vlt.load_tombstones(vault_dir=_dvault)
+
+    # the vault must not resurrect it
+    _vlt.import_from_vault(vault_dir=_dvault, session_db=_ddb)
+    assert _con.execute("SELECT count(*) FROM observations WHERE content_hash=?",
+                        (_guid,)).fetchone()[0] == 0, "vault import resurrected a hard-deleted memory"
+    _con.close()
+
 # Write-time canonicalization: a memory written with a synonym must be findable
 # by the canonical word. This is the only route to synonym recall that does not
 # require embeddings, and it costs nothing at read time.

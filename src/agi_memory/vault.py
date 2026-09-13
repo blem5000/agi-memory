@@ -212,6 +212,50 @@ def append_observation_to_vault(obs_dict: dict, vault_dir: Path | str | None = N
         return False
 
 
+def append_tombstone_to_vault(guid: str, reason: str = "hard_delete",
+                              vault_dir: Path | str | None = None) -> bool:
+    """Record that a memory was deleted, so the append-only vault cannot resurrect it.
+
+    The vault is append-only by design, which means a hard delete against the
+    local database was undone by the next import or sync from another machine.
+    A tombstone is itself an append, so deletion propagates the same way every
+    other record does, including across machines.
+    """
+    if not guid:
+        return False
+    try:
+        v_dir = init_vault(vault_dir)
+        with open(v_dir / "observations.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"_tombstone": True, "guid": guid, "reason": reason,
+                                "deleted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                               ensure_ascii=False) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def load_tombstones(vault_dir: Path | str | None = None) -> set:
+    """Guids the vault has recorded as deleted."""
+    out = set()
+    try:
+        obs_file = init_vault(vault_dir) / "observations.jsonl"
+        if not obs_file.exists():
+            return out
+        with open(obs_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if '"_tombstone"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if d.get("_tombstone") and d.get("guid"):
+                    out.add(d["guid"])
+    except Exception:
+        pass
+    return out
+
+
 def append_edge_to_vault(edge_dict: dict, vault_dir: Path | str | None = None) -> bool:
     """Fast-path append a single newly created graph edge directly to vault JSONL in <0.1ms."""
     try:
@@ -307,13 +351,14 @@ def export_dirty_to_vault(
                 FROM observations
                 ORDER BY created_at_epoch ASC
             """)
+            tombstoned = load_tombstones(v_dir)
             new_lines = []
             for row in cur:
                 ch = row["content_hash"]
                 if not ch:
                     ch = compute_guid(row["project"] or "", row["title"] or "",
                                       (row["narrative"] or "") + (row["facts"] or ""))
-                if ch in existing_hashes:
+                if ch in existing_hashes or ch in tombstoned:
                     continue
 
                 d = dict(row)
@@ -426,6 +471,7 @@ def import_from_vault(
             r[0] for r in con.execute("SELECT content_hash FROM observations WHERE content_hash IS NOT NULL").fetchall()
         )
 
+        tombstoned = load_tombstones(v_dir)
         rows_to_insert = []
         with open(obs_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -437,11 +483,13 @@ def import_from_vault(
                 except json.JSONDecodeError:
                     continue
 
+                if d.get("_tombstone"):
+                    continue  # a deletion marker, not a memory
                 ch = d.get("content_hash") or d.get("guid")
                 if not ch:
                     ch = compute_guid(d.get("project", ""), d.get("title", ""),
                                       d.get("narrative", "") + d.get("facts", ""))
-                if ch in existing_hashes:
+                if ch in existing_hashes or ch in tombstoned:
                     continue
 
                 rows_to_insert.append((

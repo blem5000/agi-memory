@@ -143,9 +143,20 @@ class GraphLayer(MemoryLayer):
                 valid_from TEXT DEFAULT CURRENT_TIMESTAMP,
                 valid_until TEXT,
                 superseded_by TEXT,
+                source_ref TEXT,
                 UNIQUE(source, relation, target, fact, project)
             )
         """)
+
+        # Provenance: which L1 observation a promoted fact came from. Without
+        # it a hard delete could not reach the graph, so deleted memories lived
+        # on as facts with no way to find them.
+        try:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(graph_edges)").fetchall()}
+            if "source_ref" not in cols:
+                con.execute("ALTER TABLE graph_edges ADD COLUMN source_ref TEXT")
+        except sqlite3.Error:
+            pass
 
         # Migration for existing graph_edges table
         cur.execute("PRAGMA table_info(graph_edges)")
@@ -244,6 +255,21 @@ class GraphLayer(MemoryLayer):
         con.commit()
         con.close()
 
+    def delete_by_source(self, source_ref: str) -> int:
+        """Remove every fact promoted from one L1 observation. Returns rows removed."""
+        if not source_ref or not self.db_path.exists():
+            return 0
+        try:
+            con = self._get_con()
+            cur = con.cursor()
+            cur.execute("DELETE FROM graph_edges WHERE source_ref = ?", (source_ref,))
+            n = cur.rowcount or 0
+            con.commit()
+            con.close()
+            return n
+        except sqlite3.Error:
+            return 0
+
     def resolve_node(self, name: str) -> str:
         """Canonicalize name by checking lowercased alias against graph_aliases."""
         clean_name = name.strip()
@@ -318,7 +344,7 @@ class GraphLayer(MemoryLayer):
         return node_id
 
     def add_edge(self, source: str, relation: str, target: str, fact: str,
-                 project: str | None = None) -> None:
+                 project: str | None = None, source_ref: str | None = None) -> None:
         """Add a directed edge connecting source and target with a relationship and fact."""
         s = self.resolve_node(source)
         t = self.resolve_node(target)
@@ -371,15 +397,16 @@ class GraphLayer(MemoryLayer):
         cur.execute("""
             INSERT INTO graph_edges (
                 source, relation, target, fact, project,
-                is_active, valid_from, valid_until, superseded_by
+                is_active, valid_from, valid_until, superseded_by, source_ref
             )
-            VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL, NULL)
+            VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL, NULL, ?)
             ON CONFLICT(source, relation, target, fact, project) DO UPDATE SET
                 is_active = 1,
                 valid_until = NULL,
                 superseded_by = NULL,
-                created_at = CURRENT_TIMESTAMP
-        """, (s, r, t, f, proj))
+                created_at = CURRENT_TIMESTAMP,
+                source_ref = COALESCE(excluded.source_ref, graph_edges.source_ref)
+        """, (s, r, t, f, proj, source_ref))
         con.commit()
         con.close()
 
@@ -406,8 +433,12 @@ class GraphLayer(MemoryLayer):
             except Exception:
                 pass
 
-    def add(self, text: str) -> None:
-        """Extract entities and relations from text and ingest into the knowledge graph."""
+    def add(self, text: str, source_ref: str | None = None) -> None:
+        """Extract entities and relations from text and ingest into the knowledge graph.
+
+        source_ref records which L1 observation produced this fact, so deleting
+        that observation can remove what it promoted.
+        """
         proj = self.project or "global"
 
         # Check if project tag is in text, e.g. "[my-proj] Title: fact"
@@ -422,13 +453,13 @@ class GraphLayer(MemoryLayer):
         extracted = self._extract_with_llm(content, proj)
         if extracted:
             for s, r, t, f in extracted:
-                self.add_edge(s, r, t, f, project=proj)
+                self.add_edge(s, r, t, f, project=proj, source_ref=source_ref)
             return
 
         # 2. Rule-based heuristic extraction (zero-token offline fallback)
         triples = self._extract_heuristic(content, proj)
         for s, r, t, f in triples:
-            self.add_edge(s, r, t, f, project=proj)
+            self.add_edge(s, r, t, f, project=proj, source_ref=source_ref)
 
     def _extract_heuristic(self, text: str, project: str) -> List[Tuple[str, str, str, str]]:
         """Extract relationship triples using linguistic and structural heuristics."""

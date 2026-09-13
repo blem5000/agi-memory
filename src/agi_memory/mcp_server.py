@@ -596,12 +596,49 @@ def cmd_delete(argv: list[str]) -> None:
         return
 
     l1 = SessionLayer()
+    # A hard delete must reach everywhere the memory went, not just L1: the
+    # facts it was promoted into, and the append-only vault that would
+    # otherwise restore it on the next import or sync from another machine.
+    guid = None
+    if args.hard:
+        row = l1.get_observation(obs_id)
+        guid = (row or {}).get("content_hash")
+
     ok = l1.delete_observation(obs_id, hard=args.hard)
-    if ok:
-        mode = "Permanently deleted" if args.hard else "Marked as superseded/deleted"
-        print(f"[✓] {mode} observation #{obs_id}.")
-    else:
+    if not ok:
         print(f"[!] Observation #{obs_id} not found or already deleted.")
+        return
+
+    if not args.hard:
+        print(f"[✓] Marked as superseded/deleted observation #{obs_id}.")
+        return
+
+    purged = 0
+    try:
+        try:
+            from agi_memory.layers.graph_layer import GraphLayer as _GL
+        except ImportError:
+            from layers.graph_layer import GraphLayer as _GL
+        purged = _GL().delete_by_source(f"obs:{obs_id}")
+    except Exception as e:
+        print(f"[!] Could not purge promoted facts: {e}")
+
+    tombstoned = False
+    if guid:
+        try:
+            try:
+                from agi_memory.vault import append_tombstone_to_vault
+            except ImportError:
+                from vault import append_tombstone_to_vault
+            tombstoned = append_tombstone_to_vault(guid)
+        except Exception as e:
+            print(f"[!] Could not write vault tombstone: {e}")
+
+    print(f"[✓] Permanently deleted observation #{obs_id} "
+          f"({purged} promoted fact(s) removed, "
+          f"vault tombstone {'written' if tombstoned else 'NOT written'}).")
+    if not tombstoned:
+        print("[!] Without a tombstone this memory can return on the next vault import.")
 
 
 def cmd_pin(argv: list[str]) -> None:

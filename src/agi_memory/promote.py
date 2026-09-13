@@ -37,8 +37,9 @@ def _save_state(seen: set) -> None:
     STATE.write_text(json.dumps(sorted(seen)))
 
 
-def collect(project: str | None = None, since_epoch: int = 0) -> list[str]:
-    """Distilled candidate texts: session learnings + durable observations."""
+def collect(project: str | None = None, since_epoch: int = 0) -> list:
+    """(text, source_ref) pairs. source_ref is "obs:<id>" for promoted
+    observations and None for session learnings, which have no row."""
     if not DB.exists():
         return []
     con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
@@ -52,20 +53,22 @@ def collect(project: str | None = None, since_epoch: int = 0) -> list[str]:
         for proj, learned, completed in con.execute(q, args).fetchall():
             body = " ".join(p for p in (learned, completed) if p and p != "None").strip()
             if _signal(body):
-                out.append(f"[{proj}] session learning: {body}")
+                out.append((f"[{proj}] session learning: {body}", None))
     except sqlite3.OperationalError:
         pass
     try:
-        q = ("SELECT project, title, facts, concepts FROM observations "
+        q = ("SELECT project, title, facts, concepts, id FROM observations "
              "WHERE created_at_epoch > ? AND type IN ('decision','bugfix','feature')")
         args = [since_epoch]
         if project:
             q += " AND project = ?"
             args.append(project)
-        for proj, title, facts, concepts in con.execute(q, args).fetchall():
+        for proj, title, facts, concepts, obs_id in con.execute(q, args).fetchall():
             tags = set((concepts or "").split(","))
             if tags & DURABLE_CONCEPTS and facts:
-                out.append(f"[{proj}] {title}: {facts}")
+                # obs:<id> is the provenance handle a hard delete uses to find
+                # what this observation promoted into the graph.
+                out.append((f"[{proj}] {title}: {facts}", f"obs:{obs_id}"))
     except sqlite3.OperationalError:
         pass
     con.close()
@@ -75,15 +78,22 @@ def collect(project: str | None = None, since_epoch: int = 0) -> list[str]:
 def promote(l2, project: str | None = None, since_epoch: int = 0,
             limit: int | None = None) -> list[str]:
     seen = _load_state()
-    fresh = [t for t in collect(project, since_epoch)
+    # collect() yields (text, source_ref); older callers only ever saw the text,
+    # so the return value stays a list of strings.
+    fresh = [(t, ref) for t, ref in collect(project, since_epoch)
              if hashlib.sha1(t.encode()).hexdigest() not in seen]
     if limit is not None:
         fresh = fresh[:limit]
-    for text in fresh:
-        l2.add(text)
+    for text, source_ref in fresh:
+        try:
+            l2.add(text, source_ref=source_ref)
+        except TypeError:
+            # Any L2 implementing the older add(text) signature still works;
+            # it just cannot participate in cascade deletes.
+            l2.add(text)
         seen.add(hashlib.sha1(text.encode()).hexdigest())
     _save_state(seen)
-    return fresh
+    return [t for t, _ in fresh]
 
 
 def auto_promote(limit: int = 25, project: str | None = None) -> list[str]:
@@ -121,7 +131,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Auto-promoted {len(promoted)} item(s) to knowledge graph.")
     else:
         seen = _load_state()
-        candidates = collect(args.project)
+        candidates = [t for t, _ in collect(args.project)]
         fresh = [t for t in candidates if hashlib.sha1(t.encode()).hexdigest() not in seen]
         if args.limit:
             fresh = fresh[:args.limit]
