@@ -1,6 +1,6 @@
 # Supported Assistants Matrix
 
-Every integrated tool gains access to 16 native tools: `memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `memory_session_outcome`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, and `code_index`:
+Every integrated tool gains access to 16 native tools: `memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `memory_session_outcome`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, and `code_index`. Session tools (`memory_timeline`, `memory_session_outcome`) work in every assistant: the server registers a session on first use, so they do not depend on lifecycle hooks, which only Claude Code, Antigravity and OpenCode install:
 
 | Assistant / Environment | Type | agi-memory MCP Config | Proactive Memory Discipline Rules |
 |---|---|---|---|

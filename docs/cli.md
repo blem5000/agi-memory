@@ -61,7 +61,7 @@ agi-memory sync init https://github.com/<you>/<repo>.git
 agi-memory sync now
 agi-memory sync dedupe
 ```
-Auto-sync is already on: every write schedules a 3s-debounced background sync
+Auto-sync is on by default (`"auto_sync": false` in `sync.json` disables it): every write schedules a 3s-debounced background sync
 and the `session-end` hook forces one. See [Vault & Git Sync](sync.md).
 
 ### Curating Knowledge (L1 -> L2 Knowledge Graph)

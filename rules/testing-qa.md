@@ -2,6 +2,26 @@
 
 All verification runs 100% offline without API keys, network access, or external daemons.
 
+## Writing a New Test File
+
+Every test entry point imports `_isolate` before anything from `agi_memory`:
+
+```python
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
+```
+
+It points the whole process at a throwaway `AGI_MEMORY_DIR`, clears every
+`*_DB` / `*_VAULT` / `*_GRAPH_DB` / `*_STATE` override that outranks it, and turns
+background auto-sync off. Tests written without it put fixture memories into the
+developer's real store, and auto-sync pushed them to the developer's git remote.
+Isolating inside a test block is too late, because `agi_memory.config` fixes
+paths at import. Isolating only `AGI_MEMORY_DB` also isn't enough, because the
+vault does not follow it.
+
+Open SQLite connections in a `finally`, and keep any delete-then-reinsert inside
+one transaction. Windows CI fails on a leaked handle, and a process that exits
+mid-rebuild must leave the previous rows, not an empty table.
+
 ## Required Verification Checklist
 
 Before committing or pushing any code changes, all 8 test suites must pass:

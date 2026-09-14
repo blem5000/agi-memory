@@ -75,3 +75,19 @@ python3 tests/test_offline.py \
 ```
 
 ---
+
+## Writing a new test file
+
+Import `_isolate` before anything from `agi_memory`:
+
+```python
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
+```
+
+It points the whole process at a throwaway `AGI_MEMORY_DIR`, clears every
+override that outranks it, and turns off background auto-sync. Without it, a
+test writes into the developer's real memory store, and auto-sync pushes the
+fixtures to their git remote. `agi_memory.config` fixes its paths at import
+time, so isolating inside a test block is too late, and isolating only
+`AGI_MEMORY_DB` still leaves the vault real. `tests/alias_coverage.py` is the
+one deliberate exception: it measures the real vault.

@@ -28,7 +28,8 @@ agi-sync now
 ```
 Auto-sync already does this: every `record` and `add_edge` schedules a
 3s-debounced background sync, and the `session-end` hook forces one. Run it by
-hand when you want the push to have happened *before* you walk away.
+hand when you want the push to have happened *before* you walk away. Set
+`"auto_sync": false` in `sync.json` to stop background syncs entirely.
 
 ### 2. Manual Compaction & Deduplication
 If large volumes of memories have been recorded:

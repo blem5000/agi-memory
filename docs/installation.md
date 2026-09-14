@@ -87,7 +87,7 @@ agi-integrate init /path/to/my-repo --name my-repo
 ```
 
 ### 4. Automated Lifecycle Hooks
-Lifecycle hooks run automatically across assistants, injecting context on startup and auto-compacting on session end:
+Lifecycle hooks are installed for Claude Code, Antigravity and OpenCode (plus git), injecting context on startup and syncing on session end. The other assistants get the same episodic tracking without hooks: the MCP server registers a session on its first memory tool call.
 ```bash
 # Automated setup (happens automatically during install all and init):
 agi-integrate hooks all

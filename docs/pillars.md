@@ -48,7 +48,8 @@ agi-memory promote --auto --limit 25
 ### Pillar 3: L3 Episodic Session History (`EpisodicLayer`)
 *Answers: "What happened during previous agent sessions?"*
 - **Cross-Session Continuity**: Captures session lifecycles (start, end, duration, agent type), touched file sets, prompt events, and git commit deltas.
-- **Automated Briefing Injection**: When an assistant launches, the `session-start` lifecycle hook generates an executive briefing of the most recent session's activity (<0.25ms), preventing cold-start rediscovery loops.
+- **Automated Briefing Injection**: When an assistant launches, the `session-start` lifecycle hook generates an executive briefing of the most recent session's activity (<0.25ms), preventing cold-start rediscovery loops. Only Claude Code, Antigravity and OpenCode install lifecycle hooks.
+- **Sessions for every assistant**: The MCP server registers an episodic session on the first memory tool call of a process, reusing an active one a hook already started. So `memory_timeline` and `memory_session_outcome` work in all thirteen supported assistants, not only the three with hooks.
 - **Session Outcomes (`memory_session_outcome` / `agi-memory outcome`)**: Record how a session
   ended - `completed`, `abandoned`, `blocked` or `superseded`. Unmarked sessions stay
   `unknown` rather than being reported as finished, and any outcome other than
