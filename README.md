@@ -80,6 +80,7 @@ Full options, including uvx and from-source: [Installation](docs/installation.md
 | [Python API](docs/python-api.md) | Using the layers directly from Python |
 | [Vault & Git Sync](docs/sync.md) | Append-only JSONL vault, cross-device sync, compaction |
 | [Benchmarks](docs/benchmarks.md) | Latency, memory and cost comparisons; real-dataset results |
+| [Hybrid Semantic Recall](docs/semantic.md) | Optional Potion/model2vec vectors fused with BM25 via RRF (`memory_recall` mode) |
 | [Testing & Evals](docs/testing.md) | The L1-L4 eval suites, chaos and stress tests |
 | [Integrations](INTEGRATIONS.md) | Manual per-tool configuration snippets |
 

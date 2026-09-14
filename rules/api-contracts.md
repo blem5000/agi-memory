@@ -10,6 +10,10 @@ Fast search over working session memory (decisions, past tool fixes, context).
   - `query` (string, required): Search query or keywords.
   - `project` (string, optional): Project filter (e.g. `"agent-memory"`).
   - `limit` (integer, default: 5): Maximum observations to return.
+  - `mode` (string, optional, default: `"auto"`): One of `"auto"`, `"lexical"`, `"hybrid"`, `"semantic"`.
+    `"hybrid"`/`"semantic"` fuse FTS5/BM25 with Potion static-embedding cosine similarity via
+    Reciprocal Rank Fusion; needs the optional `semantic` extra, otherwise degrades to lexical.
+    See [Hybrid Semantic Recall](../docs/semantic.md).
 - **Returns**: Markdown formatted string with ranked observations.
 
 ### 2. `memory_recall_deep`
@@ -18,6 +22,8 @@ Tiered recall: Searches L1 session memory AND L2 durable knowledge graph.
   - `query` (string, required): Search query or keywords.
   - `project` (string, optional): Project filter.
   - `limit` (integer, default: 5): Maximum hits per layer.
+  - `mode` (string, optional, default: `"auto"`): Recall mode for the L1 side
+    (`"lexical"` / `"hybrid"` / `"semantic"`); the L2 graph side stays lexical.
 - **Returns**: Markdown string structured into `## recent` and `## durable`.
 
 ### 3. `memory_record`
@@ -137,6 +143,16 @@ Indexes a file or directory into the structural code graph (AST + streaming rege
   - `project` (string, optional): Project name.
 - **Returns**: Number of indexed files, discovered symbols, and edges.
 
+### 17. `memory_semantic_index`
+Backfills/updates semantic embeddings for hybrid recall (optional Potion/model2vec backend).
+New memories are embedded lazily on hybrid search, so this is only needed to pre-warm a large store.
+- **Parameters**:
+  - `project` (string, optional): Project name.
+  - `batch` (integer, default: 64): Observations embedded per batch.
+  - `max_obs` (integer, default: 2000): Max observations per run.
+- **Returns**: Model id, dimension, and counts of embedded vs skipped observations.
+  Reports install guidance (`pipx install 'agi-memory[semantic]'`) when no backend is available.
+
 ## Developer Observability & Curation CLI
 
 Direct command-line interface for human developers to audit and curate memories without a SQLite shell:
@@ -152,7 +168,8 @@ Direct command-line interface for human developers to audit and curate memories 
 - `agi-memory impact <target> [--project PROJ]`: Analyze blast-radius impact of refactoring a symbol.
 - `agi-memory index [path] [--project PROJ]`: Incrementally index source files into the code graph.
 - `agi-memory bootstrap [--repo .] [--max-commits 20]`: Seed initial memories from Git history, README & code symbols.
-- `agi-memory recall <query> [--project PROJ] [--deep]`: Test working and durable memory search.
+- `agi-memory recall <query> [--project PROJ] [--deep] [--mode auto|lexical|hybrid|semantic]`: Test working and durable memory search.
+- `agi-memory semantic-index [--project PROJ] [--batch 64] [--max-obs 2000]`: Pre-warm semantic embeddings for hybrid recall.
 - `agi-memory pin <key> <content> [--category CAT] [--project PROJ]`: Pin critical rule to core memory.
 - `agi-memory unpin <key>`: Unpin a block from core memory.
 - `agi-memory blocks [--project PROJ]`: List pinned core memory blocks.
