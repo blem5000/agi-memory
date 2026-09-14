@@ -72,7 +72,7 @@ Full options, including uvx and from-source: [Installation](docs/installation.md
 
 | Guide | What's in it |
 |---|---|
-| [Installation](docs/installation.md) | Installer script, Homebrew, PyPI/uvx, from-source, hooks setup |
+| [Installation](docs/installation.md) | Installer script, Homebrew, PyPI/uvx, from-source, upgrading, hooks setup |
 | [The Four Pillars](docs/pillars.md) | Deep dive into L1 Epistemic, L2 Semantic, L3 Episodic, L4 Code Graph |
 | [Architecture](docs/architecture.md) | Layer boundaries, storage model, multi-assistant production layout |
 | [Supported Assistants](docs/assistants.md) | Per-tool config paths and rules files for all 13 assistants |

@@ -24,6 +24,40 @@ pipx install agi-memory
 # Or: pip install agi-memory
 ```
 
+### Upgrading
+
+There is no auto-updater and no update check: `agi-memory` makes no network
+requests of its own, and that is a deliberate property rather than a missing
+feature. Upgrade with whatever installed it.
+
+```bash
+# Option A (installer script) -- tracks main; re-run it to update
+curl -fsSL https://raw.githubusercontent.com/kdbhalala/agi-memory/main/install.sh | bash
+
+# Option B (Homebrew)
+brew update && brew upgrade agi-memory
+
+# Option C (pipx / pip)
+pipx upgrade agi-memory
+pip install -U agi-memory
+
+# uvx caches the version it first resolved; ask for the newest explicitly
+uvx agi-memory@latest
+```
+Check what you are on with `agi-memory --version`, against the
+[releases page](https://github.com/kdbhalala/agi-memory/releases).
+
+**Upgrading does not touch your memories.** The vault (`observations.jsonl`,
+`graph.jsonl`) is the canonical store and is only ever appended to; the SQLite
+database is a rebuildable index over it. New columns are migrated in place on
+first use, and the FTS index rebuilds itself when the tokenizer changes. So a
+version can add fields to how memories are stored without an export, a
+migration command, or any risk to what you have already recorded.
+
+**Note on Option A**: the installer clones and then `git pull`s `main`, so it
+follows the development branch rather than a tagged release. Homebrew and PyPI
+follow releases. Prefer those if you want to move only when a version ships.
+
 ### Option D: Local Repository Clone
 ```bash
 git clone https://github.com/kdbhalala/agi-memory.git
