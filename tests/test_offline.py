@@ -1205,8 +1205,14 @@ with tempfile.TemporaryDirectory() as _sm_tmp:
                    cwd=str(_repo_root), env=dict(os.environ, AGI_MEMORY_DB=str(_hook_db)),
                    stdin=_sp.DEVNULL, capture_output=True, text=True, timeout=120)
     assert _hook_db.exists(), "session-start hook created no database"
-    _rows = sqlite3.connect(_hook_db).execute(
-        "SELECT count(*) FROM episodic_sessions WHERE project = 'script-mode-hook'").fetchone()[0]
+    # Closed explicitly: Windows will not delete a temp directory holding an
+    # open SQLite file, which failed the Windows CI job on exactly this line.
+    _hook_con = sqlite3.connect(_hook_db)
+    try:
+        _rows = _hook_con.execute(
+            "SELECT count(*) FROM episodic_sessions WHERE project = 'script-mode-hook'").fetchone()[0]
+    finally:
+        _hook_con.close()
     assert _rows == 1, f"session-start hook recorded {_rows} sessions, expected 1"
 
 # 10f. Compaction must not destroy what the vault cannot restore.
@@ -1244,16 +1250,20 @@ with tempfile.TemporaryDirectory() as _cp_tmp:
 
         _compact(vault_dir=_cp_vault, session_db=_cp_db, graph_db=_cp_db)
 
+        # Closed in a finally: a failing assertion must not leave the file open,
+        # or Windows cannot clean up the temp directory and masks the real error.
         _c = sqlite3.connect(_cp_db)
-        assert _c.execute("SELECT count(*) FROM core_memory_blocks WHERE block_key='compact_pin'").fetchone()[0] == 1, \
-            "compaction destroyed a pinned core block"
-        assert _c.execute("SELECT count(*) FROM graph_aliases WHERE alias='cmpx'").fetchone()[0] == 1, \
-            "compaction destroyed a curated alias"
-        assert _c.execute("SELECT count(*) FROM episodic_sessions WHERE project='compact-proj'").fetchone()[0] == 1, \
-            "compaction destroyed episodic session history"
-        assert _c.execute("SELECT count(*) FROM code_symbols WHERE name='kept_symbol'").fetchone()[0] == 1, \
-            "compaction destroyed the code graph"
-        _c.close()
+        try:
+            _kept = {
+                "pinned core block": _c.execute("SELECT count(*) FROM core_memory_blocks WHERE block_key='compact_pin'").fetchone()[0],
+                "curated alias": _c.execute("SELECT count(*) FROM graph_aliases WHERE alias='cmpx'").fetchone()[0],
+                "episodic session history": _c.execute("SELECT count(*) FROM episodic_sessions WHERE project='compact-proj'").fetchone()[0],
+                "code graph": _c.execute("SELECT count(*) FROM code_symbols WHERE name='kept_symbol'").fetchone()[0],
+            }
+        finally:
+            _c.close()
+        for _what, _n in _kept.items():
+            assert _n == 1, f"compaction destroyed a {_what}" if _what != "code graph" else "compaction destroyed the code graph"
         assert any("Compaction" in h.text for h in SessionLayer(db_path=_cp_db, project="compact-proj").search("compaction consistent")), \
             "observations are not searchable after an in-place rebuild"
     finally:
