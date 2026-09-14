@@ -20,6 +20,7 @@ res = l1.record(
     category="architecture",
     supersedes="#101",
     rationale="Keychain survives reinstall; SharedPreferences is world-readable on rooted devices",
+    origin="user-confirmed",   # vs the default "agent-inferred", or "bootstrapped"
 )
 
 # 2. Semantic: Ingest relations into L2 graph directly

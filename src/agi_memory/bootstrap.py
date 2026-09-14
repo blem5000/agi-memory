@@ -214,7 +214,8 @@ def bootstrap_project(repo_dir: str | Path = ".", max_commits: int = 20,
                 text=readme_info["text"],
                 title=full_title,
                 project=proj,
-                category=readme_info["category"]
+                category=readme_info["category"],
+                origin="bootstrapped",
             )
             if rec.get("id"):
                 created_ids.append(rec["id"])
@@ -231,7 +232,8 @@ def bootstrap_project(repo_dir: str | Path = ".", max_commits: int = 20,
             text=c["text"],
             title=full_title,
             project=proj,
-            category=c["category"]
+            category=c["category"],
+            origin="bootstrapped",
         )
         if rec.get("id"):
             created_ids.append(rec["id"])

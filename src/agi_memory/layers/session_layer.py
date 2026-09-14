@@ -47,6 +47,29 @@ STOPWORDS = frozenset(
 )
 
 
+# Where a memory came from. Relevance ranking cannot tell a decision the user
+# confirmed from a guess an agent wrote while exploring, or from a line the
+# bootstrapper lifted out of git history -- today all three are stored and
+# ranked identically, and only the first is something later sessions should
+# treat as settled. Recorded at write time, shown in recall, and used to break
+# ties in ranking; it deliberately never outranks relevance.
+ORIGINS = ("user-confirmed", "agent-inferred", "bootstrapped")
+DEFAULT_ORIGIN = "agent-inferred"
+# agent-inferred is the common case and needs no label; the other two change
+# how the reader should treat the memory, so they are marked.
+_ORIGIN_TAG = {
+    "user-confirmed": "[confirmed by the user] ",
+    "bootstrapped": "[bootstrapped from git history, unverified] ",
+}
+
+
+def normalize_origin(value) -> str:
+    """Map anything a caller passes to a known origin, defaulting to the weakest
+    honest one. An unrecognised string must not become a trust claim."""
+    v = (value or "").strip().lower().replace("_", "-")
+    return v if v in ORIGINS else DEFAULT_ORIGIN
+
+
 # FTS5 index schema version. Bump when the tokenizer changes so existing
 # databases rebuild instead of silently serving results from the old index.
 FTS_SCHEMA_VERSION = 2
@@ -181,7 +204,7 @@ class SessionLayer(MemoryLayer):
                 if not cols:  # table not created yet; _init_db will build it
                     return
                 for col, decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER"),
-                                  ("supersedes_refs", "TEXT")):
+                                  ("supersedes_refs", "TEXT"), ("origin", "TEXT")):
                     if col not in cols:
                         con.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
                 con.commit()
@@ -242,7 +265,8 @@ class SessionLayer(MemoryLayer):
                 concepts TEXT, files_read TEXT, files_modified TEXT, prompt_number INT,
                 discovery_tokens INT, created_at TEXT, created_at_epoch INT, content_hash TEXT,
                 generated_by_model TEXT, relevance_count INT, sync_rev TEXT,
-                rationale TEXT, superseded_by INTEGER, supersedes_refs TEXT
+                rationale TEXT, superseded_by INTEGER, supersedes_refs TEXT,
+                origin TEXT
             )
         """)
         # Added after the first release. `rationale` is why a decision was made,
@@ -251,7 +275,7 @@ class SessionLayer(MemoryLayer):
         # type flipped to 'superseded' but nothing pointed at the replacement.
         _cols = {r[1] for r in con.execute("PRAGMA table_info(observations)")}
         for _col, _decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER"),
-                            ("supersedes_refs", "TEXT")):
+                            ("supersedes_refs", "TEXT"), ("origin", "TEXT")):
             if _col not in _cols:
                 con.execute(f"ALTER TABLE observations ADD COLUMN {_col} {_decl}")
         tokenize = _supported_tokenizer()
@@ -328,8 +352,8 @@ class SessionLayer(MemoryLayer):
             return []
         con = open_db(self.db_path, readonly=True)
         ph = ",".join("?" for _ in ids)
-        sql = ("SELECT id, project, title, facts, narrative, type, rationale, superseded_by "
-               "FROM observations "
+        sql = ("SELECT id, project, title, facts, narrative, type, rationale, superseded_by, "
+               "origin FROM observations "
                f"WHERE id IN ({ph})")
         args: list = [int(i) for i in ids]
         if self.project in ("agi-memory", "agent-memory"):
@@ -345,11 +369,16 @@ class SessionLayer(MemoryLayer):
             typ = row[5] if len(row) > 5 else "decision"
             why = row[6] if len(row) > 6 else None
             sup_by = row[7] if len(row) > 7 else None
+            origin = row[8] if len(row) > 8 else None
             # A dead decision must say what replaced it, not just that it is dead.
             tag = ""
             if typ == "superseded":
                 tag = f"[SUPERSEDED by #{sup_by}] " if sup_by else "[SUPERSEDED] "
             why_str = f" | Why: {why}" if why else ""
+            # A guess an agent wrote and a decision the user confirmed read the
+            # same once retrieved, so the two that change how the memory should
+            # be treated say so.
+            tag += _ORIGIN_TAG.get(origin or "", "")
             by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {f} {n}{why_str}".replace("  ", " "),
                                 source=self.name, ref=str(i))
         return [by_id[str(i)] for i in ids if str(i) in by_id]
@@ -372,7 +401,8 @@ class SessionLayer(MemoryLayer):
         elif self.project:
             sql += " AND project = ?"
             args.append(self.project)
-        sql += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank LIMIT ?"
+        sql += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
+            "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
         args.append(limit)
         rows = con.execute(sql, args).fetchall()
 
@@ -389,7 +419,8 @@ class SessionLayer(MemoryLayer):
                 elif self.project:
                     sql_pfx += " AND project = ?"
                     args_pfx.append(self.project)
-                sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank LIMIT ?"
+                sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
+                    "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
                 args_pfx.append(limit)
                 rows = con.execute(sql_pfx, args_pfx).fetchall()
 
@@ -478,7 +509,7 @@ class SessionLayer(MemoryLayer):
     def record(self, text: str, title: str | None = None,
                project: str | None = None, metadata: dict | None = None,
                category: str = "decision", supersedes: str | None = None,
-               rationale: str | None = None) -> dict:
+               rationale: str | None = None, origin: str | None = None) -> dict:
         """Record an observation/decision into L1 memory via direct SQLite FTS5 insertion."""
         proj = project or self.project or "global"
         tit = title or (text[:60].strip() + ("..." if len(text) > 60 else ""))
@@ -486,6 +517,7 @@ class SessionLayer(MemoryLayer):
         # Why the decision was made. Also written into `facts` so it is reachable
         # by search -- the FTS index covers facts, not this column.
         why = (rationale or "").strip() or None
+        src = normalize_origin(origin)
 
         # Direct SQLite insertion (self-bootstraps schema if needed).
         # The file existing does NOT imply L1's tables exist: a peer layer
@@ -558,13 +590,15 @@ class SessionLayer(MemoryLayer):
                 memory_session_id, project, type, title, subtitle,
                 facts, narrative, concepts, files_read, files_modified,
                 prompt_number, discovery_tokens, created_at, created_at_epoch,
-                content_hash, generated_by_model, relevance_count, sync_rev, rationale
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                content_hash, generated_by_model, relevance_count, sync_rev, rationale,
+                origin
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id, proj, cat, tit, "Recorded via agent-memory",
             json.dumps([text] + ([f"Rationale: {why}"] if why else [])), text,
             json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
-            "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1", why
+            "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1", why,
+            src
         ))
         obs_id = cur.lastrowid
 
@@ -646,6 +680,7 @@ class SessionLayer(MemoryLayer):
             "created_at_epoch": now_epoch,
             "content_hash": content_hash,
             "rationale": why,
+            "origin": src,
             "supersedes_refs": json.dumps(supersedes_refs) if supersedes_refs else None,
             "generated_by_model": "agent-memory",
             "relevance_count": 0,
@@ -817,7 +852,8 @@ class SessionLayer(MemoryLayer):
             row = cur.execute("""
                 SELECT id, memory_session_id, project, type, title, subtitle,
                        facts, narrative, concepts, files_read, files_modified,
-                       created_at, created_at_epoch, content_hash, rationale, superseded_by
+                       created_at, created_at_epoch, content_hash, rationale, superseded_by,
+                       origin
                 FROM observations WHERE id = ?
             """, (obs_id,)).fetchone()
             if not row:
@@ -839,6 +875,7 @@ class SessionLayer(MemoryLayer):
                 "content_hash": row[13],
                 "rationale": row[14],
                 "superseded_by": row[15],
+                "origin": row[16],
             }
         finally:
             con.close()

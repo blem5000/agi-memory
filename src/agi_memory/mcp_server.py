@@ -65,6 +65,7 @@ TOOLS = [
                                     "project": {"type": "string", "description": "Target project name"},
                                     "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory that this decision overrides/replaces. This MUTATES the referenced memory: its type flips to superseded. A caller gating destructive operations should treat memory_record with this argument set as one."},
                                     "rationale": {"type": "string", "description": "Why this decision was made - the constraints and tradeoffs behind it. Record this whenever the reasoning would not be obvious to someone reading the decision alone; a future session cannot re-examine a decision it only knows the conclusion of."},
+                                    "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped"], "default": "agent-inferred", "description": "Where this memory came from. Use user-confirmed ONLY when the user stated or approved it; use agent-inferred for anything you concluded yourself, including confident conclusions. A later session cannot tell a guess from a decision unless this says so, and an inflated value is worse than none."},
                                     "relations": {"type": "array",
                                                   "description": "Knowledge graph triples (source, relation, target) to store in L2 durable memory",
                                                   "items": {"type": "object",
@@ -342,7 +343,8 @@ def call_tool(name, args):
             project=project,
             category=category,
             supersedes=supersedes,
-            rationale=args.get("rationale")
+            rationale=args.get("rationale"),
+            origin=args.get("origin"),
         )
         msg = res.get("message", f"Memory saved as observation #{res.get('id')}")
 
@@ -588,6 +590,8 @@ def cmd_inspect(argv: list[str]) -> None:
         print(f"Replaced by: #{o['superseded_by']}")
     if o.get("rationale"):
         print(f"Why:         {o['rationale']}")
+    if o.get("origin"):
+        print(f"Origin:      {o['origin']}")
     if o.get("concepts"):
         print(f"Concepts:    {', '.join(o['concepts'])}")
     if o.get("facts"):

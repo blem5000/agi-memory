@@ -32,6 +32,12 @@ Persists verified technical learnings, decisions, or rules into session memory a
     behind it. Stored on its own column, appended to `facts` so it is searchable, rendered as
     `Why: ...` in recall, and carried across machines by the vault. Without it a later session
     inherits a conclusion it cannot re-examine.
+  - `origin` (string, optional, default: `"agent-inferred"`): Where the memory came from -
+    `"user-confirmed"`, `"agent-inferred"` or `"bootstrapped"`. Relevance ranking cannot tell a
+    decision the user approved from a guess an agent wrote while exploring; this records the
+    difference at write time, labels the two that change how a reader should treat the memory,
+    and breaks ties in ranking without ever outranking relevance. An unrecognised value falls
+    back to `agent-inferred` rather than becoming a trust claim.
   - `relations` (array of objects, optional): Knowledge graph triples to store directly into L2 durable memory:
     - `source` (string, required): Source concept/entity.
     - `relation` (string, required): Relationship type (`USES`, `REPLACES`, `IMPLEMENTS`, `FORBIDS`).

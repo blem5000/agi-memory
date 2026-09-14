@@ -4,7 +4,7 @@ Durable record of known defects, deferred work, and the reasoning behind
 decisions that are easy to re-litigate. Each item states the evidence, so a
 future session can act without re-deriving it.
 
-Last reviewed: 2026-09-13 (council-reviewed after backlog completion).
+Last reviewed: 2026-09-14 (post-0.6.0 backlog sweep).
 
 ---
 
@@ -594,7 +594,7 @@ arrives, the agent cannot tell it was conditional, and acts on it anyway.
 
 ---
 
-## 16. Nothing records whether a source is authoritative — OPEN
+## 16. Nothing records whether a source is authoritative — PARTIALLY CLOSED (2026-09-14)
 
 From the same comment: relevance, temporal validity, authority validity and
 contextual applicability are four different questions, and this project only
@@ -625,3 +625,31 @@ guessed this while exploring", which is the distinction that actually bites.
 **Do not** build a general trust framework off the back of a comment. Measure
 first whether misranked-but-relevant memories are actually causing bad agent
 behaviour — item 15's eval would be the instrument for that.
+
+**Done (2026-09-14): the cheapest step above, and only that.** `observations.origin`
+(migrated in place) holds `user-confirmed`, `agent-inferred` or `bootstrapped`,
+set at write time, defaulting to `agent-inferred`. An unrecognised value falls
+back to the default rather than becoming a trust claim, since the field is only
+worth anything if it cannot be inflated by accident.
+
+- Recall labels the two origins that change how a reader should treat the
+  memory: `[confirmed by the user]` and `[bootstrapped from git history,
+  unverified]`. `agent-inferred` is the common case and is left unmarked, so
+  the label carries signal instead of decorating every line.
+- `bootstrap.py` now writes `bootstrapped`, which is where the distinction
+  actually bites: a line lifted out of a commit message is a description of
+  what the code did once, and it was previously indistinguishable from a
+  decision somebody stood behind.
+- Ranking uses origin as the **last** sort key, after BM25 rank. It separates
+  records the scorer could not, and never reorders on authority over relevance.
+- Carried through the vault, so the distinction survives the machine boundary —
+  the same bug class that dropped `rationale` on export in item 11.
+- `eval_usage.py` gained a probe asserting a bootstrapped memory announces
+  itself; verified to fail when the label is removed. Now 6/6 and 2/2.
+
+**Still open**: temporal validity on L1 and contextual applicability, which is
+item 11's remaining half. Nothing records what a decision depended on, so
+nothing can flag when those conditions stop holding. Origin says who wrote a
+memory, not whether it still applies — and the measurement this item called for
+(whether misranked-but-relevant memories actually cause bad agent behaviour)
+has still not been run, so any further trust modelling remains unjustified.

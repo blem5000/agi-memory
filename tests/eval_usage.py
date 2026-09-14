@@ -73,6 +73,10 @@ def _seed(db: Path):
     l1.record(
         text="Serve thumbnails from a dedicated CDN bucket.",
         title="Thumbnail Delivery", project="usage", category="decision")
+    l1.record(
+        text="The worker pool size is set from the CPU count at startup.",
+        title="Worker Pool", project="usage", category="architecture",
+        origin="bootstrapped")
 
     ep = EpisodicLayer(db_path=db, project="usage")
     sid = ep.start_session(project="usage", goal="Move the queue onto Kafka")["session_id"]
@@ -87,6 +91,14 @@ def _seed(db: Path):
 
 
 PROBES = [
+    Probe(
+        # A line lifted out of git history is a description of what the code did
+        # at one commit, not a decision anybody stands behind. Unmarked, it is
+        # indistinguishable from one, and an agent will treat it as settled.
+        "a bootstrapped memory admits it was never confirmed",
+        "worker pool size CPU count", "worker pool",
+        must_contain=("bootstrapped",),
+    ),
     Probe(
         "a reversed decision is not returned as if it still stood",
         "Redis queue", "Redis",
