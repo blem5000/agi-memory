@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 try:
-    from agi_memory.layers.base import MemoryLayer  # noqa: F401
+    from agi_memory.layers.base import MemoryLayer, open_db  # noqa: F401
     from agi_memory.layers.session_layer import SessionLayer
     from agi_memory.layers.episodic_layer import EpisodicLayer
     from agi_memory.layers.code_layer import CodeLayer
@@ -28,7 +28,7 @@ try:
     from agi_memory import __version__
 except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
-    from layers.base import MemoryLayer  # noqa: F401
+    from layers.base import MemoryLayer, open_db  # noqa: F401
     from layers.session_layer import SessionLayer
     from layers.episodic_layer import EpisodicLayer
     from layers.code_layer import CodeLayer
@@ -852,6 +852,71 @@ def cmd_index(argv: list[str]) -> None:
     print(res)
 
 
+def cmd_stats(argv: list[str]) -> None:
+    """Show local cognitive memory statistics across all four layers."""
+    import argparse
+    parser = argparse.ArgumentParser(prog="agi-memory stats", description="Show local cognitive memory statistics")
+    parser.add_argument("--project", "-p", default=None, help="Filter statistics to a specific project")
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+    args = parser.parse_args(argv)
+
+    l1 = SessionLayer()
+    conn = open_db(l1.db_path, readonly=True)
+    try:
+        cur = conn.cursor()
+
+        def _count(query: str, params: tuple = ()) -> int:
+            try:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                return row[0] if row else 0
+            except Exception:
+                return 0
+
+        obs_filter = " WHERE project = ?" if args.project else ""
+        obs_params = (args.project,) if args.project else ()
+
+        total_obs = _count(f"SELECT COUNT(*) FROM observations{obs_filter}", obs_params)
+        pinned_blocks = _count(f"SELECT COUNT(*) FROM core_memory_blocks WHERE status = 'pinned'{' AND project = ?' if args.project else ''}", obs_params)
+        total_entities = _count("SELECT COUNT(*) FROM graph_entities")
+        active_edges = _count("SELECT COUNT(*) FROM graph_edges WHERE is_active = 1")
+        total_sessions = _count(f"SELECT COUNT(DISTINCT session_id) FROM session_events{obs_filter}", obs_params)
+        total_symbols = _count(f"SELECT COUNT(*) FROM code_symbols{obs_filter}", obs_params)
+
+        cur.execute("SELECT project, COUNT(*) as c FROM observations GROUP BY project ORDER BY c DESC LIMIT 10")
+        projects = {row[0] or "default": row[1] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps({
+            "database": str(l1.db_path),
+            "filter_project": args.project,
+            "l1_observations": total_obs,
+            "core_pinned_blocks": pinned_blocks,
+            "l2_entities": total_entities,
+            "l2_active_edges": active_edges,
+            "l3_sessions": total_sessions,
+            "l4_code_symbols": total_symbols,
+            "projects": projects
+        }, indent=2))
+        return
+
+    print("\n=== agi-memory Local Cognitive Memory Statistics ===")
+    print(f"Database:     {l1.db_path}")
+    if args.project:
+        print(f"Project:      {args.project}")
+    print(f"L1 Memories:  {total_obs} observations ({pinned_blocks} pinned core blocks)")
+    print(f"L2 Graph:     {total_entities} entities, {active_edges} active relations")
+    print(f"L3 Episodic:  {total_sessions} agent sessions tracked")
+    print(f"L4 Code AST:  {total_symbols} code symbols indexed")
+    if projects:
+        print("\nActive Projects (top):")
+        for proj, cnt in projects.items():
+            print(f"  • {proj}: {cnt} observations")
+    print("\nPrivacy Guarantee: 100% on-device SQLite. Zero network egress / telemetry.\n")
+
+
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
@@ -942,6 +1007,9 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "index":
             cmd_index(argv[1:])
             return
+        elif cmd == "stats":
+            cmd_stats(argv[1:])
+            return
         elif cmd in ("-v", "--version", "version"):
             print(f"agi-memory {__version__}")
             return
@@ -949,6 +1017,7 @@ def main(argv: list[str] | None = None) -> None:
             print("agi-memory: Zero-dependency four-pillar cognitive memory framework with MCP server.\n")
             print("Usage:")
             print("  agi-memory                           Start MCP stdio server")
+            print("  agi-memory stats [--json]            Show local cognitive memory statistics")
             print("  agi-memory bootstrap [--repo .]      Bootstrap initial memories from Git & README")
             print("  agi-memory timeline [--limit 5]      Inspect past session timelines and recaps")
             print("  agi-memory outcome <completed|abandoned|blocked|superseded>")

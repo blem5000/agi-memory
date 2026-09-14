@@ -139,6 +139,10 @@ fi
 
 echo -e "\nQuick Verification Commands:"
 echo -e "  ${BOLD}agi-integrate status${NC}     # Check assistant status"
+echo -e "  ${BOLD}agi-memory stats${NC}         # View local memory statistics"
 echo -e "  ${BOLD}agi-recall \"auth\"${NC}        # Query working memory"
 echo -e "  ${BOLD}agi-sync status${NC}          # Check Git vault sync"
+echo -e "\n${BOLD}Feedback & Community:${NC}"
+echo -e "  ★ Star on GitHub:      https://github.com/kdbhalala/agi-memory"
+echo -e "  💬 File an Issue:      https://github.com/kdbhalala/agi-memory/issues"
 echo ""

@@ -1549,7 +1549,8 @@ alwaysApply: true
 
     print(f"\n[✓] {target} is wired for agent-memory ({len(written)} assistant command formats).")
     print(f"\nNext: open this repo in your assistant and run  /{_init_cmd.COMMAND_NAME}")
-    print("     It analyzes the codebase and writes rules/ and context/ for real.\n")
+    print("     It analyzes the codebase and writes rules/ and context/ for real.")
+    print("✦ agi-memory on GitHub: https://github.com/kdbhalala/agi-memory\n")
 
 
 def cmd_hooks(args: argparse.Namespace) -> None:

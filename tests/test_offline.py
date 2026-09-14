@@ -1291,6 +1291,8 @@ with tempfile.TemporaryDirectory() as boot_tmp:
     mcp_server.cmd_blocks(["--project", "sample-agent-app"])
     mcp_server.cmd_unpin(["test_invariant"])
     mcp_server.cmd_delete([str(first_id)])
+    mcp_server.cmd_stats([])
+    mcp_server.cmd_stats(["--json", "--project", "sample-agent-app"])
 
     # ========================================================================
     # EpisodicLayer (L3: Session Lifecycle, Timelines, Touched Files) Tests
