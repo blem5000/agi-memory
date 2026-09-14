@@ -35,6 +35,7 @@ Before committing or pushing any code changes, all 8 test suites must pass:
 5. **L4 Structural Code Graph Evaluation**:
    ```bash
    python3 tests/eval_l4.py
+   python3 tests/eval_usage.py
    ```
    Evaluates L4 graph accuracy (25/25 target) and latency (<1ms) against a fixture
    repository whose call edges are true by construction, covering Python,

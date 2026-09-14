@@ -541,7 +541,7 @@ storage for code search.
 
 ---
 
-## 15. Evals measure retrieval, never whether the memory was used correctly — OPEN
+## 15. Evals measure retrieval, never whether the memory was used correctly — PARTIALLY CLOSED (2026-09-14)
 
 Named by a commenter writing about persistent-memory architecture: *separate
 retrieval failure from usage failure. Sometimes the right memory was found, but
@@ -567,6 +567,26 @@ Postgres" should make a subsequent question about datastore choice answer
 "Postgres was rejected", not merely retrieve the record. Score retrieval and
 use separately, and report them as two numbers, because collapsing them is the
 thing that hides the failure.
+
+**Done (2026-09-14)**: `tests/eval_usage.py` scores retrieval and
+**actionability** as two separate numbers. Actionability asks whether the block
+handed to the agent carries the qualifier needed to act on it correctly — a
+superseded decision that names its replacement, a constraint that carries its
+reason, a fuzzy hit that admits it is approximate, a recap that refuses to
+present abandoned work as continuable. Currently 5/5 and 2/2.
+
+Verified sensitive rather than self-confirming: removing the rationale
+rendering, the supersession pointer and the do-not-resume warning drops
+actionability to 2/5 **while retrieval stays at 5/5**. That is the thesis
+demonstrated — three memories still found, none safely usable, and every other
+eval in the repository would have reported a clean sweep.
+
+**Still open, and it is the part that needs a model**: this measures whether
+correct use is *possible*, not whether a model then used it correctly. Closing
+that needs an LLM in the loop, which means a network call and a dependency, so
+it cannot live in this test suite as it stands. The honest options are a
+separate opt-in harness or accepting the proxy. The proxy is a floor, not the
+measurement the commenter was describing, and the eval's own output says so.
 
 **Related**: item 11's remaining half. A rationale that returns as
 indistinguishable prose is a usage failure waiting to happen — the memory
