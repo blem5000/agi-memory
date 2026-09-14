@@ -1047,8 +1047,13 @@ def setup_sync_interactive(non_interactive: bool = False, auto_gh: bool = False)
         import sync
         import vault
 
+    # A call to vault.bootstrap_from_existing_claudemem() used to sit here. That
+    # function was removed as unused, the call was not, and every
+    # `agi-integrate install` crashed with AttributeError after writing tool
+    # configs but before sync and bootstrap setup ran. No migration is lost:
+    # get_default_db() already opens a legacy ~/.claude-mem database directly,
+    # and export_dirty_to_vault mirrors it into the vault on the next sync.
     v_dir = vault.init_vault()
-    vault.bootstrap_from_existing_claudemem()
 
     cfg = sync.load_sync_config()
     if cfg.get("remote_url"):

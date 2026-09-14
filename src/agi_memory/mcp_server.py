@@ -14,6 +14,7 @@ Run:  python3 mcp_server.py   (spawned by the agent with any cwd)
 """
 import json
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -254,9 +255,61 @@ def _core_text(blocks):
     return "\n".join(lines)
 
 
+_SESSION_REGISTERED: set = set()
+
+
+def _started_recently(started_at, hours: int = 12) -> bool:
+    """Whether a session began within the last `hours`.
+
+    started_at is SQLite CURRENT_TIMESTAMP, which is UTC. Comparing its date to
+    the local calendar date never matched for anyone east or west of UTC once
+    the two dates diverged, so a hook-started session was never reused and every
+    MCP process opened a duplicate.
+    """
+    import datetime as _dt
+    try:
+        started = _dt.datetime.strptime(str(started_at)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return False
+    return _dt.datetime.now(_dt.timezone.utc) - started < _dt.timedelta(hours=hours)
+
+
+def _ensure_session(project):
+    """Give this server process an episodic session for the project it works in.
+
+    Only Claude Code, Antigravity and OpenCode get lifecycle hooks, and only a
+    hook ever started a session. So for Cursor, Windsurf, Codex, Aider, Goose,
+    Cline, Roo, Crush, Pi and Hermes -- ten of the thirteen supported assistants
+    -- memory_timeline stayed empty and memory_session_outcome always answered
+    "No session found to mark". The first memory tool call of a process now
+    reuses today's active session for the project (so a hook-started session is
+    not duplicated) or starts one. Failures never break the tool call itself.
+    """
+    try:
+        proj = project
+        if not proj:
+            try:
+                from agi_memory.hooks import detect_project
+            except ImportError:
+                from hooks import detect_project
+            proj = detect_project()
+        if proj in _SESSION_REGISTERED:
+            return proj
+        ep = EpisodicLayer(project=proj)
+        last = ep.get_last_session(project=proj)
+        if not (last and last.get("status") == "active" and _started_recently(last.get("started_at"))):
+            ep.start_session(project=proj)
+        _SESSION_REGISTERED.add(proj)
+        return proj
+    except Exception:
+        return project
+
+
 def call_tool(name, args):
     project = args.get("project")
     limit = int(args.get("limit", 5) or 5)
+    if name.startswith("memory_") and name not in ("memory_sync",):
+        _ensure_session(project)
     def _canonicalize(term: str) -> str:
         """Resolve a term through the L2 alias table. Injected into L1 so the
         layers stay decoupled; failures degrade to returning the term as-is.

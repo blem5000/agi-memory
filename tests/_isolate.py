@@ -8,9 +8,11 @@ database but not the vault, or neither. Patching them one at a time kept
 missing the next one, so isolation now happens once, per process, before any
 path is resolved: agi_memory.config freezes its path constants at import.
 
-Every override that outranks AGI_MEMORY_DIR is cleared, and the legacy
-~/.claude-mem database is pointed somewhere that does not exist, because
-get_default_db() prefers it whenever it is present on a developer's machine.
+Every override that outranks AGI_MEMORY_DIR is cleared. CLAUDE_MEM_DB is then
+set inside the temp dir: get_default_db() treats that variable as an explicit
+database path, and without it falls back to a legacy ~/.claude-mem database
+whenever one exists on the developer's machine. Setting it pins the database to
+the throwaway directory either way.
 
 Deliberately NOT imported by tests/alias_coverage.py, which exists to measure
 the developer's real vault.

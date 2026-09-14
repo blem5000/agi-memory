@@ -1274,6 +1274,55 @@ with tempfile.TemporaryDirectory() as _cp_tmp:
             else:
                 os.environ[_k] = _v
 
+# 10g. Every MCP client gets an episodic session, not only the three with hooks.
+# Only Claude Code, Antigravity and OpenCode install lifecycle hooks, and only a
+# hook ever started a session -- so for the other ten supported assistants
+# memory_timeline stayed empty and memory_session_outcome always answered
+# "No session found to mark". The server now registers one on the first memory
+# tool call, and must reuse a hook-started session instead of duplicating it.
+# (The reuse check first compared SQLite's UTC start time against the LOCAL
+# date, so it never matched east or west of UTC once the dates diverged.)
+with tempfile.TemporaryDirectory() as _ms_tmp:
+    _ms_db = Path(_ms_tmp) / "mcp_session.db"
+    _ms_env = dict(os.environ, AGI_MEMORY_DB=str(_ms_db), AGI_MEMORY_VAULT=str(Path(_ms_tmp) / "vault"),
+                   AGENT_MEMORY_PROJECT="mcp-session")
+
+    def _mcp_calls(_calls):
+        _msgs = [{"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                  "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}},
+                 {"jsonrpc": "2.0", "method": "notifications/initialized"}]
+        _msgs += [{"jsonrpc": "2.0", "id": i + 1, "method": "tools/call", "params": {"name": n, "arguments": a}}
+                  for i, (n, a) in enumerate(_calls)]
+        _out = _sp.run([sys.executable, str(_repo_root / "src" / "agi_memory" / "mcp_server.py")],
+                       input="\n".join(json.dumps(m) for m in _msgs), capture_output=True, text=True,
+                       timeout=120, env=_ms_env, cwd=str(_repo_root)).stdout
+        _res = {}
+        for _line in _out.splitlines():
+            try:
+                _m = json.loads(_line)
+            except ValueError:
+                continue
+            if "id" in _m and "result" in _m:
+                _res[_m["id"]] = "".join(c.get("text", "") for c in _m["result"].get("content", []))
+        return _res
+
+    # A hookless client: no session exists until its first memory tool call.
+    _r = _mcp_calls([("memory_recall", {"query": "anything"}),
+                     ("memory_session_outcome", {"outcome": "completed"})])
+    assert "recorded as completed" in _r.get(2, ""), f"hookless MCP client could not mark an outcome: {_r.get(2)!r}"
+
+    def _session_count():
+        _con = sqlite3.connect(_ms_db)
+        try:
+            return _con.execute("SELECT count(*) FROM episodic_sessions WHERE project='mcp-session'").fetchone()[0]
+        finally:
+            _con.close()
+    assert _session_count() == 1, f"expected one registered session, got {_session_count()}"
+
+    # A second server process on the same project must reuse the active session.
+    _mcp_calls([("memory_recall", {"query": "anything"})])
+    assert _session_count() == 1, f"a second MCP process duplicated the session: {_session_count()}"
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)
