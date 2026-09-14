@@ -67,19 +67,30 @@ SERVER_INSTRUCTIONS = (
 
 TOOLS = [
     {"name": "memory_recall",
-     "description": "Search recent agent session memory (decisions, fixes, context). Fast, local. Matching is by keyword, not meaning, and any term can match: include the other words a past note may have used (e.g. 'login auth authentication session').",
+     "description": "Search recent agent session memory (decisions, fixes, context). Fast, local. Set mode='hybrid' for paraphrase-tolerant recall (needs the optional 'semantic' extra; falls back to lexical). Matching is by keyword, so include synonyms a past note may have used (e.g. 'login auth authentication session').",
      "inputSchema": {"type": "object",
                      "properties": {"query": {"type": "string", "description": "Search query or keywords to recall"},
                                     "project": {"type": "string", "description": "Optional project name filter"},
-                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"}},
+                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"},
+                                    "mode": {"type": "string", "enum": ["auto", "lexical", "hybrid", "semantic"],
+                                             "default": "auto", "description": "Recall mode: 'lexical' (FTS5/BM25 only) or 'hybrid'/'semantic' (RRF-fused vector search when a backend is available)"}},
                      "required": ["query"]}},
     {"name": "memory_recall_deep",
-     "description": "Search session memory AND durable long-term knowledge (architecture, reusable fixes).",
+     "description": "Search session memory AND durable long-term knowledge (architecture, reusable fixes). Set mode='hybrid' for paraphrase-tolerant recall.",
      "inputSchema": {"type": "object",
                      "properties": {"query": {"type": "string", "description": "Search query or keywords to recall"},
                                     "project": {"type": "string", "description": "Optional project name filter"},
-                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"}},
+                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"},
+                                    "mode": {"type": "string", "enum": ["auto", "lexical", "hybrid", "semantic"],
+                                             "default": "auto", "description": "Recall mode for the session-memory side (knowledge-graph side stays lexical)"}},
                      "required": ["query"]}},
+    {"name": "memory_semantic_index",
+     "description": "Backfill/update semantic embeddings for hybrid recall (optional Potion/model2vec backend; reports guidance when unavailable). New memories are embedded lazily on hybrid search, so this is only needed to pre-warm a large store.",
+     "inputSchema": {"type": "object",
+                     "properties": {"project": {"type": "string", "description": "Optional project name filter"},
+                                    "batch": {"type": "integer", "default": 64, "description": "Observations embedded per batch"},
+                                    "max_obs": {"type": "integer", "default": 2000, "description": "Max observations to embed in one run"}},
+                     "required": []}},
     {"name": "memory_record",
      "description": "Save a decision, pattern, rule, or bugfix into session memory, and optionally the knowledge graph, so every agent can recall it.",
      "inputSchema": {"type": "object",
@@ -215,6 +226,7 @@ WRITE_TOOLS = frozenset({
     "memory_record",
     "memory_promote",
     "memory_session_outcome",
+    "memory_semantic_index",
     "code_index",
 })
 
@@ -229,6 +241,45 @@ for _t in TOOLS:
 
 def _hits_text(hits):
     return "\n---\n".join(h.text for h in hits) or "(no hits)"
+
+
+def _hybrid_hits(l1, query: str, limit: int, mode: str, project):
+    """Recall hits honoring mode. Returns (hits, mode_used, note).
+
+    Pure-lexical unless mode asks for more *and* a semantic backend loads.
+    Never raises: any failure degrades to FTS5 results.
+    """
+    if str(mode or "auto").lower() == "lexical":
+        return l1.search(query, limit), "lexical", ""
+    try:
+        try:
+            from agi_memory.layers import semantic_layer as sem
+        except ImportError:
+            from layers import semantic_layer as sem
+    except Exception:
+        return l1.search(query, limit), "lexical", ""
+    if not sem.semantic_enabled():
+        return l1.search(query, limit), "lexical", ""
+    try:
+        be = sem.get_backend()
+    except Exception as e:
+        if str(mode).lower() in ("hybrid", "semantic"):
+            return l1.search(query, limit), "lexical", str(e)
+        return l1.search(query, limit), "lexical", ""
+    try:
+        hits, info = sem.hybrid_search(query, l1, be, limit=limit, project=project)
+        return hits, info.get("mode", "hybrid"), info.get("note", "")
+    except Exception:
+        return l1.search(query, limit), "lexical", ""
+
+
+def _mode_footer(mode_used: str, note: str) -> str:
+    out = ""
+    if mode_used == "hybrid":
+        out = "\n\n[recall mode: hybrid lexical+semantic]"
+    if note:
+        out += f"\n({note})" if out else f"\n\n({note})"
+    return out
 
 
 def _miss_text(query: str, project, layer) -> str:
@@ -347,23 +398,26 @@ def call_tool(name, args):
         query = str(args.get("query", "")).strip()
         if not query:
             return "(empty query)"
+        mode = str(args.get("mode", "auto") or "auto").lower()
         pinned = l1.get_pinned_blocks(project=project) if hasattr(l1, "get_pinned_blocks") else []
         core_block = _core_text(pinned)
-        hits = l1.search(query, limit)
+        hits, mode_used, note = _hybrid_hits(l1, query, limit, mode, project)
         l1.mark_shown([h.ref for h in hits])
         recent_text = _hits_text(hits) if hits else _miss_text(query, project, l1)
+        footer = _mode_footer(mode_used, note)
         if core_block:
-            return f"{core_block}\n\n## recent\n{recent_text}"
-        return recent_text
+            return f"{core_block}\n\n## recent\n{recent_text}{footer}"
+        return f"{recent_text}{footer}"
     if name == "memory_recall_deep":
         query = str(args.get("query", "")).strip()
         if not query:
             return "(empty query)"
+        mode = str(args.get("mode", "auto") or "auto").lower()
         try:
             l2: MemoryLayer | None = GraphLayer(project=project)
         except Exception:
             l2 = None
-        r = recall(query, l1, l2, limit=limit, deep=True)
+        r = recall(query, l1, l2, limit=limit, deep=True, mode=mode)
         out = ""
         core_block = _core_text(r.get("core") or (l1.get_pinned_blocks(project=project) if hasattr(l1, "get_pinned_blocks") else []))
         if core_block:
@@ -376,7 +430,41 @@ def call_tool(name, args):
             out += "\n\n## durable\n" + _hits_text(r["durable"])
         elif r.get("note"):
             out += f"\n\n({r['note']})"
+        out += _mode_footer(r.get("mode", "lexical"), r.get("semantic_note", ""))
         return out
+    if name == "memory_semantic_index":
+        try:
+            try:
+                from agi_memory.layers import semantic_layer as sem
+            except ImportError:
+                from layers import semantic_layer as sem
+        except Exception as e:
+            return f"unavailable: {e}"
+        if not sem.semantic_enabled():
+            return ("Semantic search is disabled (AGI_MEMORY_SEMANTIC_ENABLED=0). "
+                    "Unset it or set it to 1/auto to enable hybrid recall.")
+        try:
+            be = sem.get_backend()
+        except Exception as e:
+            return (f"Semantic backend unavailable: {e}\n"
+                    f"Install the optional extra: pipx install 'agi-memory[semantic]' "
+                    f"or set AGI_MEMORY_SEMANTIC_BACKEND=hash for the stdlib fallback.")
+        try:
+            batch = int(args.get("batch", 64) or 64)
+        except (TypeError, ValueError):
+            batch = 64
+        try:
+            max_obs = int(args.get("max_obs", 2000) or 2000)
+        except (TypeError, ValueError):
+            max_obs = 2000
+        res = sem.ensure_index(l1, be, project=project, batch=batch, max_obs=max_obs)
+        if res["embedded"] == 0 and not res["model"]:
+            return "Semantic index: nothing to do (empty store or indexing failed)."
+        if res["embedded"] == 0:
+            return (f"Semantic index ({res['model']}): already up to date, "
+                    f"nothing new to embed.")
+        return (f"Semantic index ({res['model']}, dim {res['dim']}): "
+                f"{res['embedded']} embedded, {res['skipped']} skipped.")
     if name == "memory_pin":
         key = str(args.get("key", "")).strip()
         content = str(args.get("content", "")).strip()
@@ -853,11 +941,26 @@ def cmd_recall(argv: list[str]) -> None:
     parser.add_argument("--project", "-p", default=None, help="Project name filter")
     parser.add_argument("--deep", action="store_true", help="Search L2 knowledge graph as well")
     parser.add_argument("--limit", "-n", type=int, default=5, help="Max hits to return (default: 5)")
+    parser.add_argument("--mode", "-m", default="auto", choices=["auto", "lexical", "hybrid", "semantic"],
+                        help="Recall mode (hybrid/semantic need the 'semantic' extra; default: auto)")
     args = parser.parse_args(argv)
 
     tool_name = "memory_recall_deep" if args.deep else "memory_recall"
-    res = call_tool(tool_name, {"query": args.query, "project": args.project, "limit": args.limit})
+    res = call_tool(tool_name, {"query": args.query, "project": args.project,
+                               "limit": args.limit, "mode": args.mode})
     print(res)
+
+
+def cmd_semantic_index(argv: list[str]) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="agi-memory semantic-index",
+                                     description="Pre-warm semantic embeddings for hybrid recall")
+    parser.add_argument("--project", "-p", default=None, help="Project filter")
+    parser.add_argument("--batch", type=int, default=64, help="Observations per batch (default: 64)")
+    parser.add_argument("--max-obs", type=int, default=2000, help="Max observations per run (default: 2000)")
+    args = parser.parse_args(argv)
+    print(call_tool("memory_semantic_index", {"project": args.project,
+                                              "batch": args.batch, "max_obs": args.max_obs}))
 
 
 def cmd_timeline(argv: list[str]) -> None:
@@ -1095,6 +1198,9 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "recall":
             cmd_recall(argv[1:])
             return
+        elif cmd == "semantic-index":
+            cmd_semantic_index(argv[1:])
+            return
         elif cmd == "timeline":
             cmd_timeline(argv[1:])
             return
@@ -1140,6 +1246,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory inspect <id>              Inspect observation details and facts")
             print("  agi-memory delete <id> [--hard]      Delete/supersede an observation")
             print("  agi-memory recall <query>            Search working & durable memory")
+            print("  agi-memory semantic-index          Pre-warm semantic embeddings for hybrid recall")
             print("  agi-memory pin <key> <content>       Pin critical invariant to core memory")
             print("  agi-memory unpin <key>               Unpin block from core memory")
             print("  agi-memory blocks                    List pinned core memory blocks")

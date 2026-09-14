@@ -72,15 +72,8 @@ in [Installation](docs/installation.md).
 
 | Guide | What's in it |
 |---|---|
-| [Installation](docs/installation.md) | Install options, upgrading, lifecycle hooks |
-| [CLI Usage](docs/cli.md) | Every `agi-memory` and `agi-integrate` command |
-| [Supported Assistants](docs/assistants.md) | Where each assistant's config lives, and the 16 MCP tools |
-| [How memory is organised](docs/pillars.md) | Notes, knowledge graph, session history, code index |
-| [Architecture](docs/architecture.md) | How the pieces fit together |
-| [Vault & Git Sync](docs/sync.md) | The memory files, syncing between machines, compaction |
-| [Python API](docs/python-api.md) | Using it directly from Python |
-| [Testing & Evals](docs/testing.md) | How it's tested, and where it falls short |
 | [Benchmarks](docs/benchmarks.md) | Speed and memory measurements |
+| [Hybrid Semantic Recall](docs/semantic.md) | Optional Potion/model2vec vectors fused with BM25 via RRF (`memory_recall` mode) |
 | [Integrations](INTEGRATIONS.md) | Manual setup snippets for each assistant |
 
 ## License
