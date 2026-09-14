@@ -6,7 +6,7 @@ future session can act without re-deriving it.
 
 Last reviewed: 2026-09-14 (post-0.6.0 backlog sweep).
 
-## Standing gates — why the four open items are not being worked
+## Standing gates — why the remaining open items are not being worked
 
 Nothing below is open for lack of time. Each is blocked on something that must
 happen outside the code, and picking any of them up before its gate is met
@@ -16,11 +16,12 @@ re-deriving it.
 | Item | Gate | Who or what clears it |
 | :--- | :--- | :--- |
 | 7. Distribution | Nobody outside the author has used this. Every priority question after it is guesswork. | The maintainer posting it. Not a code task. |
-| 14. Static embeddings | Its own entry says measure first: embed the vault with potion, run the synonym category, compare with the 6% baseline. That measurement needs a downloaded model, so it cannot run inside this dependency-free test suite. | A one-off out-of-tree experiment. If the number does not move, the whole item dies. |
+| 14. Static embeddings | ~~Measure first~~ — **measured 2026-09-14 and closed**. Paraphrase recall went 0/18 to 1/6 with 500 real distractors, for 89 MB of Rust and C dependencies plus a 307 MB model cache. The number did not move; the item died, as its own gate said it would. | Done. |
 | 15. Usage failure, remaining half | Measuring whether a model *used* a memory correctly needs a model in the loop — a network call and a dependency. `eval_usage.py` measures the deterministic floor and says so. | A separate opt-in harness, or accepting the proxy. |
 | 11. Contextual applicability | Recording what a decision depended on, so something can flag when those conditions stop holding. A modelling problem, and no cheap storage change closes it — a constraints field would return as more indistinguishable prose, which is the failure it is meant to fix. | A real design, prompted by a real case. |
 
-Items 14 and 11 both wait on evidence item 7 would produce. That ordering is
+Item 11 waits on evidence item 7 would produce. (Item 14 no longer waits on
+anything: its measurement was run on 2026-09-14 and closed it.) That ordering is
 the point: distribution is not a nice-to-have at the end of the list, it is
 what makes the rest of the list decidable.
 
@@ -533,7 +534,7 @@ gate, but the specific defect that caused the data loss is gone and tested.
 
 ---
 
-## 14. Static embeddings could close the synonym gap without the 500MB — OPEN (gated: measure first, out of tree)
+## 14. Static embeddings could close the synonym gap without the 500MB — MEASURED, NOT WORTH BUILDING (2026-09-14)
 
 Raised by a commenter pointing at [Model2Vec / potion](https://huggingface.co/collections/minishlab/potion)
 and the [semble](https://github.com/MinishLab/semble) code-search MCP built on it.
@@ -579,6 +580,46 @@ number substantially on this corpus, none of the work above is justified.
 
 **Also worth reading regardless**: semble, for how it handles chunking and
 storage for code search.
+
+---
+
+**Measured (2026-09-14).** The gate above said measure before building. Done,
+out of tree in a throwaway venv, against `eval_fuzzy.py`'s own corpus and
+probes so the numbers are comparable to the 0/18 paraphrase baseline.
+
+**The first run looked promising and was wrong.** On the bare 6-document
+fixture, `potion-base-8M` scored paraphrase 4/6 at top-3. With a 6-document
+corpus, top-3 hits 50% by luck alone, so that number meant nothing. Re-running
+with the fixture buried in **500 real vault observations** (chance at top-3:
+0.59%) is the honest test:
+
+| top-5, 506 docs | potion-base-8M | potion-retrieval-32M | BM25 today |
+| :--- | :--- | :--- | :--- |
+| paraphrase | 0/6 | **1/6** | 0/18 |
+| abbreviation | 0/2 | 1/2 | 1/6 |
+| typo | 3/6 | 3/6 | 5/19 |
+| precision (exact query ranks its own record first) | 6/6 | 6/6 | 6/6 |
+
+Both models miss `login` -> `authentication`, which is the canonical example
+this whole line of work exists to fix. The retrieval-tuned model finds one
+paraphrase out of six. That is not the step change the suggestion promised, and
+it is nowhere near enough to justify the costs below.
+
+**What it would have cost**: `tokenizers` is Rust, `numpy` is C — the venv came
+to **89 MB** plus a **307 MB** HuggingFace cache, against a stated
+zero-dependency, offline guarantee. Reimplementing the tokenizer in pure Python
+was already known to be the real work; the measurement says the payoff on the
+other side of it is one probe.
+
+**What the numbers do say**: embedding is genuinely fast (0.06 ms/doc, 0.04 ms
+per query encode) and precision held at 6/6 — it does not wreck exact matching.
+So the idea is sound and the implementation is cheap; the *semantics at this
+model size* are the thing that does not deliver. A full sentence-transformer
+might. That is the 500 MB this project exists to avoid.
+
+**Status**: closed unless someone brings a measurement showing a bigger static
+model clears this bar. The scripts are gone with the scratchpad, but they are
+thirty lines: embed the corpus, cosine, score the same probe table.
 
 ---
 
