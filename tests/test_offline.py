@@ -387,6 +387,17 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 # sha256 against a v0.4.0 tarball for two releases because nothing checked.
 _pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
 _pkg_version = _re_mod.search(r'^version\s*=\s*"([^"]+)"', _pyproject, _re_mod.M).group(1)
+# The reported version must be the packaged one. It was a hardcoded literal in
+# two more places and drifted: 0.6.0 shipped reporting 0.5.0, which would also
+# have failed the formula's own `--version` assertion on `brew install`.
+import agi_memory as _agi_mod  # noqa: E402
+assert _agi_mod.__version__ == _pkg_version, \
+    f"agi_memory.__version__ is {_agi_mod.__version__}, pyproject says {_pkg_version}"
+_ver_out = _sp.run(
+    [sys.executable, str(Path(__file__).resolve().parent.parent / "src" / "agi_memory" / "mcp_server.py"), "--version"],
+    capture_output=True, text=True, timeout=60).stdout.strip()
+assert _ver_out.endswith(_pkg_version), f"CLI --version said {_ver_out!r}, pyproject says {_pkg_version}"
+
 for _formula in sorted((Path(__file__).resolve().parent.parent / "Formula").glob("*.rb")):
     _text = _formula.read_text(encoding="utf-8")
     _f_ver = _re_mod.search(r"tags/v([0-9.]+)\.tar\.gz", _text)

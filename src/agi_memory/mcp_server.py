@@ -14,6 +14,7 @@ Run:  python3 mcp_server.py   (spawned by the agent with any cwd)
 """
 import json
 import sys
+from pathlib import Path
 
 try:
     from agi_memory.layers.base import MemoryLayer  # noqa: F401
@@ -38,7 +39,15 @@ except ImportError:
     import sync
     import vault
     from vault import append_tombstone_to_vault
-    __version__ = "0.6.0"
+    # Same single source of truth as the package import above, rather than a
+    # second literal that a release has to remember to bump.
+    import re as _re
+    _pyproject = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+    try:
+        _m = _re.search(r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(encoding="utf-8"), _re.M)
+        __version__ = _m.group(1) if _m else "0.0.0+unknown"
+    except OSError:
+        __version__ = "0.0.0+unknown"
 
 TOOLS = [
     {"name": "memory_recall",
