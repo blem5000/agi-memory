@@ -29,6 +29,7 @@ try:
     from agi_memory.layers.session_layer import add_record_listener, remove_record_listener
     from agi_memory.layers.graph_layer import add_edge_listener, remove_edge_listener
     from agi_memory.vault import (
+        _is_default_db,
         deduplicate_and_compact,
         export_dirty_to_vault,
         import_from_vault,
@@ -39,6 +40,7 @@ except ImportError:
     from layers.session_layer import add_record_listener, remove_record_listener
     from layers.graph_layer import add_edge_listener, remove_edge_listener
     from vault import (
+        _is_default_db,
         deduplicate_and_compact,
         export_dirty_to_vault,
         import_from_vault,
@@ -416,11 +418,15 @@ def schedule_auto_sync(vault_dir: Path | str | None = None, delay_seconds: float
 
 def _sync_on_record(obs_dict: dict) -> None:
     """Callback triggered on SessionLayer.record to schedule debounced auto-sync."""
+    if not _is_default_db(obs_dict):
+        return
     schedule_auto_sync()
 
 
 def _sync_on_edge(edge_dict: dict) -> None:
     """Callback triggered on GraphLayer.add_edge to schedule debounced auto-sync."""
+    if not _is_default_db(edge_dict):
+        return
     schedule_auto_sync()
 
 

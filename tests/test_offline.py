@@ -383,6 +383,36 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert sorted(_lines1) == sorted(_lines2) == ['{"id": 1}', '{"id": 2}', '{"id": 3}'], \
         f"vaults diverged: {_lines1} vs {_lines2}"
 
+# A layer pointed at a temporary database must not write to the real vault.
+# The ambient record and edge listeners append to the configured vault and
+# schedule a git sync, and they fired for every write regardless of which
+# database it went to -- so running the tests seeded the developer's own vault
+# and pushed the fixtures to their remote. 222 such records were found in a
+# real vault, under projects named "p", "usage" and "x".
+import hashlib as _hashlib  # noqa: E402
+from agi_memory import vault as _vault_mod  # noqa: E402,F401  (registers the listener)
+from agi_memory.config import get_vault_dir as _get_vault_dir  # noqa: E402
+from agi_memory.layers.graph_layer import GraphLayer as _GL_leak  # noqa: E402
+from agi_memory.layers.session_layer import SessionLayer as _SL_leak  # noqa: E402
+
+_real_obs = _get_vault_dir() / "observations.jsonl"
+_real_graph = _get_vault_dir() / "graph.jsonl"
+_sizes_before = tuple(f.stat().st_size if f.exists() else 0 for f in (_real_obs, _real_graph))
+with tempfile.TemporaryDirectory() as _leak_tmp:
+    _leak_db = Path(_leak_tmp) / "leak.db"
+    _canary = "LEAK-CANARY-" + _hashlib.sha256(_leak_tmp.encode()).hexdigest()[:10]
+    _SL_leak(db_path=_leak_db, project="p-leakcheck").record(
+        text=_canary, title="Leak canary", project="p-leakcheck")
+    _GL_leak(db_path=_leak_db, project="p-leakcheck").add_edge(
+        "CanaryA", "USES", "CanaryB", _canary, project="p-leakcheck")
+    _sizes_after = tuple(f.stat().st_size if f.exists() else 0 for f in (_real_obs, _real_graph))
+    assert _sizes_before == _sizes_after, \
+        f"a temp database wrote to the real vault: {_sizes_before} -> {_sizes_after}"
+    for _f in (_real_obs, _real_graph):
+        if _f.exists():
+            assert _canary not in _f.read_text(encoding="utf-8", errors="ignore"), \
+                f"canary leaked into {_f}"
+
 # Homebrew formulae must track the packaged version. They shipped a v0.2.0
 # sha256 against a v0.4.0 tarball for two releases because nothing checked.
 _pyproject = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")

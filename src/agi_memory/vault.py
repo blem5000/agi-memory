@@ -198,8 +198,30 @@ def append_edge_to_vault(edge_dict: dict, vault_dir: Path | str | None = None) -
         return False
 
 
+def _is_default_db(payload: dict) -> bool:
+    """Whether a dispatched record came from the user's real database.
+
+    The ambient listeners mirror into the configured vault and schedule a git
+    sync. They used to do that for every write, including ones aimed at a
+    temporary database, so running the test suite seeded the developer's own
+    vault and pushed the fixtures to their remote: 222 such records were found
+    in a real vault, under projects named "p", "usage" and "x". A payload with
+    no db_path predates the stamp and is treated as the default, which is the
+    behaviour it had.
+    """
+    db = payload.get("db_path")
+    if not db:
+        return True
+    try:
+        return Path(db).resolve() == get_default_db().resolve()
+    except OSError:
+        return False
+
+
 def _vault_on_record(obs_dict: dict) -> None:
     """Callback triggered on SessionLayer.record to persist observation to vault."""
+    if not _is_default_db(obs_dict):
+        return
     try:
         append_observation_to_vault(obs_dict)
     except Exception:
@@ -208,6 +230,8 @@ def _vault_on_record(obs_dict: dict) -> None:
 
 def _vault_on_edge(edge_dict: dict) -> None:
     """Callback triggered on GraphLayer.add_edge to persist edge to vault."""
+    if not _is_default_db(edge_dict):
+        return
     try:
         append_edge_to_vault(edge_dict)
     except Exception:

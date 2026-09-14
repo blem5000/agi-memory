@@ -757,3 +757,43 @@ nothing can flag when those conditions stop holding. Origin says who wrote a
 memory, not whether it still applies — and the measurement this item called for
 (whether misranked-but-relevant memories actually cause bad agent behaviour)
 has still not been run, so any further trust modelling remains unjustified.
+
+---
+
+## 17. Running the tests wrote into the developer's real vault — FIXED (2026-09-14)
+
+**Severity: high.** Test fixtures reached a production memory store and were
+pushed to its git remote.
+
+`SessionLayer.record` and `GraphLayer.add_edge` dispatch to module-level
+listeners, and `vault.py` and `sync.py` register theirs on import. Those
+listeners append to the **configured** vault and schedule a git sync — they
+took no notice of which database the write was actually aimed at. So every test
+that pointed a layer at a temporary file still wrote its fixtures into the real
+vault, and auto-sync then committed and pushed them.
+
+**Measured on the maintainer's own machine**: 227 records across both the
+SQLite index and `observations.jsonl`, under projects named `p` (214), `usage`,
+`x`, `mod-proj`, `hop`, `p-render`. Titles like "Queue", "W" and "Key Rotation"
+— eval fixtures and throwaway probes, indistinguishable from real memories once
+they land.
+
+**Fix**: every dispatched payload now carries `db_path`, and the vault and sync
+listeners ignore anything that is not the default database. The scoping lives
+in those two listeners rather than in the dispatcher, because the dispatcher's
+contract — a registered listener hears every record — is a documented extension
+point with a test asserting it. A payload without `db_path` is treated as the
+default, preserving the old behaviour for any caller building one by hand.
+
+Guarded in `test_offline.py` with a canary: write to a temp database, assert the
+real vault's files did not grow and the canary is absent. Verified sensitive by
+removing the scoping and watching it fail.
+
+**Not yet done**: the 227 records are still in the maintainer's vault and on its
+remote. Removing them is a data operation on somebody's real store, so it waits
+for an explicit decision rather than being tidied away here.
+
+**The wider lesson**: ambient module-level listeners that act on global config
+are invisible at the call site. Nothing in a test that says
+`SessionLayer(db_path=tmp)` suggests it is also writing to `~/.agi-memory` and
+pushing to GitHub. Treat any new global listener as suspect for the same reason.

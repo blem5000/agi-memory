@@ -442,6 +442,10 @@ class GraphLayer(MemoryLayer):
                 self.on_edge(edge_payload)
             except Exception:
                 pass
+        # Same as SessionLayer.record: listeners are told which database this
+        # edge went into, so the vault and sync listeners can ignore anything
+        # that is not the real one.
+        edge_payload["db_path"] = str(self.db_path)
         for listener in _EDGE_LISTENERS:
             try:
                 listener(edge_payload)

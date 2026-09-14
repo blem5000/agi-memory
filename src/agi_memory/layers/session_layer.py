@@ -714,7 +714,11 @@ class SessionLayer(MemoryLayer):
             "sync_rev": "1"
         }
 
-        # Dispatch to instance callback and registered listeners
+        # Dispatch to instance callback and registered listeners. Every
+        # listener is told which database the record went into: the vault and
+        # sync listeners must ignore writes aimed at anything but the real one,
+        # and they cannot tell without this.
+        obs_payload["db_path"] = str(self.db_path)
         if self.on_record:
             try:
                 self.on_record(obs_payload)
