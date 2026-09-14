@@ -538,3 +538,70 @@ number substantially on this corpus, none of the work above is justified.
 
 **Also worth reading regardless**: semble, for how it handles chunking and
 storage for code search.
+
+---
+
+## 15. Evals measure retrieval, never whether the memory was used correctly — OPEN
+
+Named by a commenter writing about persistent-memory architecture: *separate
+retrieval failure from usage failure. Sometimes the right memory was found, but
+the model used it incorrectly.*
+
+Every number this project reports is a retrieval number. `eval_l1` through
+`eval_l4`, `eval_fuzzy`, the 100% exact-wording and 35% degraded figures — all
+of them ask "did the right record come back". None ask "did the agent then act
+on it". That is half the pipeline, unmeasured, and the headline numbers do not
+say so.
+
+This matters more here than for a search engine, because the consumer is an
+agent that will act. A recall that returns the right memory and is then ignored
+or misread fails the user identically to a recall that returned nothing, and
+today the two are indistinguishable in every metric.
+
+**Why it is tractable**: it is an eval-design problem, not an architecture one.
+No storage or ranking change is required to start measuring it.
+
+**Proposed first step**: extend the fuzzy eval's probe format with an expected
+*behaviour*, not only an expected record — a memory saying "we rejected
+Postgres" should make a subsequent question about datastore choice answer
+"Postgres was rejected", not merely retrieve the record. Score retrieval and
+use separately, and report them as two numbers, because collapsing them is the
+thing that hides the failure.
+
+**Related**: item 11's remaining half. A rationale that returns as
+indistinguishable prose is a usage failure waiting to happen — the memory
+arrives, the agent cannot tell it was conditional, and acts on it anyway.
+
+---
+
+## 16. Nothing records whether a source is authoritative — OPEN
+
+From the same comment: relevance, temporal validity, authority validity and
+contextual applicability are four different questions, and this project only
+answers the first properly.
+
+- **Relevance** — BM25, stemming, fragment matching. Every improvement made
+  this week went here.
+- **Temporal validity** — partial. L2 edges are bi-temporal (`valid_from`,
+  `valid_until`, `is_active`); L1 observations have nothing equivalent beyond
+  the superseded flag.
+- **Authority** — absent. Nothing records whether a memory is a trusted source
+  for the question being asked. A guess an agent wrote while exploring and a
+  decision the user confirmed are stored identically and rank identically.
+- **Contextual applicability** — absent, and the same gap as item 11: nothing
+  records what a decision depended on, so nothing can flag when those
+  conditions stop holding.
+
+**The uncomfortable version**: the whole ranking stack is a relevance engine,
+and relevance is the one dimension that was already adequate. A memory can rank
+first, be exactly on topic, and be wrong for the current question.
+
+**Cheapest useful step**, if picked up: an explicit origin on each observation —
+user-confirmed, agent-inferred, or bootstrapped from git history — set at write
+time, surfaced in recall, and used to break ties. That is a much smaller change
+than a trust model, and it separates "the user told me this" from "an agent
+guessed this while exploring", which is the distinction that actually bites.
+
+**Do not** build a general trust framework off the back of a comment. Measure
+first whether misranked-but-relevant memories are actually causing bad agent
+behaviour — item 15's eval would be the instrument for that.
