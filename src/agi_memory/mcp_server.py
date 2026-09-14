@@ -1,6 +1,6 @@
 """agent-memory MCP server (stdio, stdlib only, zero dependencies).
 
-Exposes the two-layer framework to any MCP-capable coding agent:
+Exposes the four-pillar framework to any MCP-capable coding agent:
   memory_recall        L1 session memory (fast, zero tokens server-side)
   memory_recall_deep   L1 + L2 durable knowledge (falls back to L1 alone)
   memory_record        save decision, pattern, rule, or fix into session/graph

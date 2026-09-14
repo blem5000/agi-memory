@@ -15,7 +15,7 @@
    - **Vault Storage & Compaction** ([`vault.py`](../src/agi_memory/vault.py)): Canonical append-only JSONL files in `~/.agi-memory/vault/` (with `~/.agent-memory/vault/` automatic legacy fallback).
    - **Git Sync Engine** ([`sync.py`](../src/agi_memory/sync.py)): Automatic background push/pull to private GitHub repository.
    - **Cold-Start Seeder** ([`bootstrap.py`](../src/agi_memory/bootstrap.py)): Zero-touch memory bootstrapping from Git history, `README.md`, and code symbols.
-   - **Developer Observability & MCP Server** ([`mcp_server.py`](../src/agi_memory/mcp_server.py)): Dispatches 15 native MCP tools and CLI curation commands (`log`, `inspect`, `delete`, `pin`, `unpin`, `blocks`, `timeline`, `structure`, `callers`, `dependencies`, `impact`, `index`, `bootstrap`).
+   - **Developer Observability & MCP Server** ([`mcp_server.py`](../src/agi_memory/mcp_server.py)): Dispatches 16 native MCP tools and CLI curation commands (`log`, `inspect`, `delete`, `pin`, `unpin`, `blocks`, `alias`, `recall`, `timeline`, `outcome`, `structure`, `callers`, `dependencies`, `impact`, `index`, `stats`, `bootstrap`).
    - **Project Analysis** ([`analyze.py`](../src/agi_memory/analyze.py)): Deterministic repository facts (languages, manifests, package manager, build/test/run commands, test layout, schema surfaces, CI), exposed as `agi-memory analyze [--json]`.
    - **Slash Command Emitter** ([`init_command.py`](../src/agi_memory/init_command.py)): Renders the `/agi-init` playbook into every assistant's native command format (Markdown, TOML, workflow, SKILL.md).
    - **Connection Policy** ([`layers/base.py`](../src/agi_memory/layers/base.py)): `open_db()` is the only place SQLite connections are opened.

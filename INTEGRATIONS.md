@@ -160,7 +160,7 @@ If you install or update coding tools after initial setup, manage hooks directly
 agi-integrate hooks all
 
 # Target specific tools
-agi-integrate hooks claude agy git
+agi-integrate hooks claude opencode agy git
 
 # Project-level scope
 agi-integrate hooks all --scope project
@@ -294,6 +294,15 @@ Append the standard Memory Discipline section from above.
 
 #### Rules (`~/.config/opencode/rules.md`)
 Append the standard Memory Discipline section from above.
+
+#### Lifecycle hooks (plugin — OpenCode has no native hook config)
+```bash
+agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agent-memory.js
+agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agent-memory.js
+```
+The generated zero-dependency plugin shells out to the hooks CLI: session-start
+via `experimental.chat.system.transform`, pre-compact via
+`experimental.session.compacting`, session-end on `session.idle`.
 
 ---
 

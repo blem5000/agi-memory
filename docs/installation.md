@@ -93,7 +93,7 @@ Lifecycle hooks run automatically across assistants, injecting context on startu
 agi-integrate hooks all
 
 # Target specific coding tools:
-agi-integrate hooks claude agy git
+agi-integrate hooks claude opencode agy git
 
 # Or via agi-memory CLI:
 agi-memory integrate hooks agy claude

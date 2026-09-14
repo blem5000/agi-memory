@@ -91,8 +91,8 @@ To wire or refresh lifecycle hooks (`session-start`, `pre-compact`, `session-end
 # Install hooks for all detected tools
 agi-integrate hooks all
 
-# Target specific tool (e.g. Claude Code or Antigravity)
-agi-integrate hooks claude agy git
+# Target specific tool (e.g. Claude Code, OpenCode, or Antigravity)
+agi-integrate hooks claude opencode agy git
 
 # Target project scope
 agi-integrate hooks all --scope project

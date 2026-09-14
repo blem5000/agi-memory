@@ -171,7 +171,7 @@ Agent memory supports automated execution triggers across coding tools (Claude C
   - Automatically installed during `python integrate.py install all` and `python integrate.py init`.
 - **Manual Management**:
   - `agent-memory integrate hooks [tools...] [--scope user|project] [--uninstall]`
-  - `agent-integrate hooks [claude|agy|git|all] [--scope user|project] [--uninstall]`
+  - `agent-integrate hooks [claude|opencode|agy|git|all] [--scope user|project] [--uninstall]`
 - **Hook Endpoints**:
   - `session-start`: Injects active project precedents and pinned Core Memory invariants into the assistant's initial prompt context.
   - `pre-compact`: Curates and promotes high-signal working memory observations into L2 durable triples before context window truncation.

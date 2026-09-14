@@ -1593,7 +1593,7 @@ with tempfile.TemporaryDirectory() as doc_tmp:
             f"{_ro} is a read; gating it would slow every lookup down"
 
 
-    # 15b. Tool parity: all 15 MCP tools registered in mcp_server must be documented
+    # 15b. Tool parity: all 16 MCP tools registered in mcp_server must be documented
     registered_tools = {t["name"] for t in mcp_server.TOOLS}
     assert len(registered_tools) == 16, f"Expected 16 tools in mcp_server, found {len(registered_tools)}"
 
