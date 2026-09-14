@@ -8,6 +8,7 @@ Runs fully isolated in a temp dir via AGI_MEMORY_DIR — never touches ~/.agi-me
 """
 from __future__ import annotations
 
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import json
 import os
 import sqlite3

@@ -438,6 +438,16 @@ def call_tool(name, args):
         sessions = ep.get_timeline(project=project, limit=limit)
         return EpisodicLayer.format_timeline(sessions)
     if name == "memory_session_outcome":
+        # Hooks register sessions under the detected project (the git-root
+        # name). Falling back to "global" here meant an agent calling this with
+        # no project -- the normal case -- was told "No session found to mark"
+        # even with an active session in the database.
+        if not project:
+            try:
+                from agi_memory.hooks import detect_project
+            except ImportError:
+                from hooks import detect_project
+            project = detect_project()
         ep = EpisodicLayer(project=project)
         try:
             marked = ep.set_outcome(args.get("outcome", ""), session_id=args.get("session_id"),

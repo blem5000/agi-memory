@@ -1,6 +1,7 @@
 """L2 Knowledge Graph evaluation: ingests curated durable items, quizzes single and multi-hop.
 Zero tokens on native GraphLayer (SQLite CTEs).
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import re
 import sys

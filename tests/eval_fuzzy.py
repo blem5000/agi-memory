@@ -18,6 +18,7 @@ Only the first three are reachable by fuzzy string matching. Paraphrase is
 listed to show what fuzz can NOT buy: it needs curated aliases or host-side
 query expansion, not a looser matcher.
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import re
 import sys

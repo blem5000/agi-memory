@@ -28,7 +28,9 @@ except ImportError:
         from .base import Hit, MemoryLayer, open_db
     except (ImportError, ValueError):
         from config import DEFAULT_DB, get_default_db
-        from layers.base import Hit, MemoryLayer
+        # Same omission as episodic_layer had: script-mode callers got a
+        # NameError on the first query.
+        from layers.base import Hit, MemoryLayer, open_db
 
 IGNORED_DIRS: Set[str] = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",

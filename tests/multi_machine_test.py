@@ -12,6 +12,7 @@ own AGI_MEMORY_DIR, AGI_MEMORY_VAULT and AGI_MEMORY_DB.
 
 Run:  python3 tests/multi_machine_test.py
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import json
 import os
 import shutil

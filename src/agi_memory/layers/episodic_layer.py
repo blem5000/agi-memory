@@ -25,7 +25,10 @@ except ImportError:
         from .base import Hit, MemoryLayer, open_db, stem_terms
     except (ImportError, ValueError):
         from config import DEFAULT_DB, get_default_db
-        from layers.base import Hit, MemoryLayer
+        # Script mode is how every lifecycle hook runs. Omitting open_db here
+        # made EpisodicLayer() raise NameError inside the hooks' bare except,
+        # so no real session was ever recorded.
+        from layers.base import Hit, MemoryLayer, open_db, stem_terms
 
 
 # How a session ended, as distinct from whether it stopped. 'unknown' is the

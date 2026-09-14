@@ -262,8 +262,9 @@ def export_dirty_to_vault(
 ) -> dict[str, int]:
     """Export records from SQLite to vault JSONL files idempotently."""
     v_dir = init_vault(vault_dir)
-    s_db = Path(session_db) if session_db else SESSION_DB
-    g_db = Path(graph_db) if graph_db else GRAPH_DB
+    # Resolved at call time: the constants are frozen at import, which let an
+    # export triggered after an environment change read the user's real database.
+    s_db, g_db = _active_dbs(session_db, graph_db)
 
     exported_obs = 0
     exported_graph = 0
@@ -389,6 +390,23 @@ def export_dirty_to_vault(
     return {"observations": exported_obs, "graph": exported_graph}
 
 
+def _active_dbs(session_db, graph_db) -> tuple:
+    """Session and graph database paths, resolved at call time.
+
+    The module-level SESSION_DB / GRAPH_DB constants are fixed when this module is
+    first imported, so anything overriding the database afterwards -- including a
+    background sync firing after a test restored its environment -- still reached
+    the user's real file.
+    """
+    s = Path(session_db) if session_db else get_default_db()
+    if graph_db:
+        g = Path(graph_db)
+    else:
+        env = os.environ.get("AGI_MEMORY_GRAPH_DB") or os.environ.get("AGENT_MEMORY_GRAPH_DB")
+        g = Path(env) if env else s
+    return s, g
+
+
 def import_from_vault(
     vault_dir: Path | str | None = None,
     session_db: Path | str | None = None,
@@ -396,8 +414,7 @@ def import_from_vault(
 ) -> dict[str, int]:
     """Import records from vault JSONL files into local SQLite tables idempotently."""
     v_dir = init_vault(vault_dir)
-    s_db = Path(session_db) if session_db else SESSION_DB
-    g_db = Path(graph_db) if graph_db else GRAPH_DB
+    s_db, g_db = _active_dbs(session_db, graph_db)
 
     s_db.parent.mkdir(parents=True, exist_ok=True)
     g_db.parent.mkdir(parents=True, exist_ok=True)
@@ -562,6 +579,43 @@ def import_from_vault(
     return {"observations": imported_obs, "graph": imported_graph}
 
 
+def _clear_derived_tables(db: Path, tables: tuple, fts_tables: tuple) -> None:
+    """Empty only the tables the vault can repopulate; leave every other table."""
+    if not db.exists():
+        return
+    con = open_db(db)
+    try:
+        for t in tables:
+            try:
+                con.execute(f"DELETE FROM {t}")
+            except sqlite3.Error:
+                pass  # table not created yet in this database
+        con.commit()
+    finally:
+        con.close()
+    _rebuild_fts(db, fts_tables)
+
+
+def _rebuild_fts(db: Path, fts_tables: tuple) -> None:
+    """Resync external-content FTS indexes with their base tables.
+
+    Rows can be deleted or inserted without the sync triggers present (they are
+    created lazily), so an index is rebuilt rather than assumed consistent.
+    """
+    if not db.exists():
+        return
+    con = open_db(db)
+    try:
+        for t in fts_tables:
+            try:
+                con.execute(f"INSERT INTO {t}({t}) VALUES('rebuild')")
+            except sqlite3.Error:
+                pass  # index absent in this database
+        con.commit()
+    finally:
+        con.close()
+
+
 def deduplicate_and_compact(
     vault_dir: Path | str | None = None,
     session_db: Path | str | None = None,
@@ -576,8 +630,7 @@ def deduplicate_and_compact(
     4. Graph deduplication: Unifies duplicate node variants and edge facts.
     """
     v_dir = init_vault(vault_dir)
-    s_db = Path(session_db) if session_db else SESSION_DB
-    g_db = Path(graph_db) if graph_db else GRAPH_DB
+    s_db, g_db = _active_dbs(session_db, graph_db)
 
     # First, make sure any local SQLite records are dumped into vault
     export_dirty_to_vault(vault_dir=v_dir, session_db=s_db, graph_db=g_db)
@@ -716,27 +769,25 @@ def deduplicate_and_compact(
                 f.write(json.dumps(d, ensure_ascii=False) + "\n")
         tmp_graph.replace(graph_file)
 
-    # 3. Rebuild local SQLite databases cleanly from compacted vault
-    if s_db.resolve() == g_db.resolve():
-        if s_db.exists():
-            s_db.unlink(missing_ok=True)
-            for suff in ["-wal", "-shm"]:
-                Path(str(s_db) + suff).unlink(missing_ok=True)
-        import_from_vault(vault_dir=v_dir, session_db=s_db, graph_db=g_db)
-    else:
-        if obs_file.exists():
-            if s_db.exists():
-                s_db.unlink(missing_ok=True)
-                for suff in ["-wal", "-shm"]:
-                    Path(str(s_db) + suff).unlink(missing_ok=True)
-            import_from_vault(vault_dir=v_dir, session_db=s_db, graph_db=None)
-
-        if graph_file.exists():
-            if g_db.exists():
-                g_db.unlink(missing_ok=True)
-                for suff in ["-wal", "-shm"]:
-                    Path(str(g_db) + suff).unlink(missing_ok=True)
-            import_from_vault(vault_dir=v_dir, session_db=None, graph_db=g_db)
+    # 3. Rebuild the vault-derived tables from the compacted vault, IN PLACE.
+    #
+    # This used to delete the database file and re-import. The vault only carries
+    # observations and graph nodes/edges, so deleting the file silently destroyed
+    # everything else living in it: pinned core blocks, curated aliases, every
+    # episodic session and event, and the entire code graph. It ran automatically
+    # on a schedule, so every user lost those periodically without being told.
+    # Only the tables the vault can repopulate are cleared now.
+    if obs_file.exists():
+        _clear_derived_tables(s_db, ("observations",), ("observations_fts",))
+    if graph_file.exists():
+        _clear_derived_tables(g_db, ("graph_edges", "graph_nodes"),
+                              ("graph_edges_fts", "graph_nodes_fts"))
+    import_from_vault(vault_dir=v_dir,
+                      session_db=s_db if obs_file.exists() else None,
+                      graph_db=g_db if graph_file.exists() else None)
+    for db, fts_tables in ((s_db, ("observations_fts",)),
+                           (g_db, ("graph_edges_fts", "graph_nodes_fts"))):
+        _rebuild_fts(db, fts_tables)
 
     return {
         "observations_before": obs_before,

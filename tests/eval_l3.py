@@ -6,6 +6,7 @@ Scored the same way as eval_l1/eval_l2: retrieval accuracy plus latency, so a
 regression in episodic recall shows up as a number rather than a pass/fail.
 Zero tokens on the native EpisodicLayer (SQLite).
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import re
 import sys

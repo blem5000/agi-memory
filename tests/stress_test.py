@@ -16,6 +16,7 @@ Evaluates performance across 11 tiers:
 """
 from __future__ import annotations
 
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import concurrent.futures
 import io
 import json

@@ -22,6 +22,7 @@ and the summary says so rather than letting a clean score imply more than it is.
 
 Run:  python3 tests/eval_usage.py [--verbose]
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import sys
 import tempfile

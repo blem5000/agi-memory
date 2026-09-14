@@ -8,6 +8,7 @@ rather than as a still-passing assertion.
 
 Zero tokens on the native CodeLayer (stdlib AST + regex, SQLite CTEs).
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import sys
 import tempfile

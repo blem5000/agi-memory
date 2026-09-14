@@ -1,6 +1,7 @@
 """L1 stress test: 10 technical questions graded for substring match + latency.
 Local retrieval only — zero LLM calls. Runs on an isolated evaluation DB.
 """
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
 import json
 import re

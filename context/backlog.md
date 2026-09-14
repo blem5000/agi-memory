@@ -914,3 +914,90 @@ that when quoting it.
 earlier run today read 0/6, stable across three consecutive runs since. Not
 isolated. L4 morphological and typo are 0/4 each now rather than 0/1 — the same
 failure, better sampled.
+
+---
+
+## 19. The episodic pillar never recorded a real session — FIXED (2026-09-15)
+
+**Severity: high.** One of the four headline pillars was dead in production, and
+every feature built on it — session briefings, `memory_session_outcome`, the
+do-not-resume warning — was inert with it.
+
+**Found by driving every command end to end**, not by any test. On a clean data
+dir, `python3 hooks.py session-start` — byte-for-byte the command in
+`~/.claude/settings.json` — exited 0, printed nothing and created no database.
+
+**Cause**: `episodic_layer.py` and `code_layer.py` each have a script-mode import
+fallback (`from layers.base import ...`) used when the package is not importable,
+which is exactly the case when a hook runs as a script. Both fallbacks omitted
+`open_db` (episodic also omitted `stem_terms`). So `EpisodicLayer()` raised
+`NameError` inside the hook's bare `except Exception: pass`, and nothing was
+recorded or reported. Package-mode tests take the other branch and never saw it.
+
+**Evidence of impact**: the maintainer's real database — ~15,000 memories — held
+exactly **one** episodic session, ever, and it was `test-proj`, written by
+`test_offline.py`'s hook test running unscoped against the real store. A second
+leak, of episodic rows, which item 17's vault-listener fix did not cover.
+
+**Fixed**:
+- Both fallbacks import the names they use.
+- The 10d hook test runs with `AGI_MEMORY_DB` pointed at a throwaway file.
+- New guard (10e) imports every layer in script mode in a subprocess and calls
+  each, then runs the real `hooks.py session-start` entry point and asserts a
+  session row exists.
+- `memory_session_outcome` with no `project` now defaults to the detected
+  project instead of `global`. It previously looked under `global` while hooks
+  register sessions under the git-root name, so the command CLAUDE.md tells every
+  agent to call reported "No session found to mark" unless given `--project`.
+
+**Reframes the evidence behind items 11 and 16**: the "3 supersessions in 14,748"
+reading stands, but any conclusion drawn from episodic data was drawn from a
+pillar that was not running. Re-measure outcome and briefing usage only after
+this fix has been live long enough to produce real sessions.
+
+**The `test-proj` session stays** in the maintainer's store, per the item 17
+decision: nothing is discarded.
+
+**Found while verifying item 19 (2026-09-15) — two more, worse:**
+
+**A. Compaction destroyed everything the vault does not carry. FIXED.**
+`deduplicate_and_compact` deleted `memory.db` and re-imported from the vault.
+The vault carries only observations and graph rows, so every compaction wiped
+pinned core blocks, curated aliases, all episodic sessions and events, and the
+entire code graph. It runs automatically — weekly, or after 50 new memories —
+so every user lost those periodically with no message. It also resolved the
+database from `SESSION_DB`/`GRAPH_DB`, constants frozen at import, so a
+compaction fired by a debounced background sync after a test restored its
+environment operated on the user's real file. That is what dropped the
+maintainer's L3 and L4 tables at 01:32 on 2026-09-15.
+
+Fix: only the vault-derived tables (`observations`, `graph_nodes`,
+`graph_edges`) are cleared and re-imported in place, their external-content FTS
+indexes are rebuilt, and every database path resolves at call time
+(`_active_dbs`). Verified on a copy of the real 14,794-observation store: pins,
+aliases, observation count and search all intact, 2.5s. Guard 10f seeds a pin,
+an alias, a session and a code symbol, compacts, and asserts all four survive —
+verified to fail against the old delete-and-rebuild.
+
+**B. Tests kept leaking into the real store, under names nobody was checking.**
+Item 17 scoped the vault listeners to the default database — but tests isolate
+by pointing `AGI_MEMORY_DB` at a temp file, which makes that file "the default"
+while `get_vault_dir()` still resolves the real vault. Leaks found after item 17
+had shipped: `inflight-proj` (92 records), `test-proj` (31), `miss-proj` (15),
+plus `p1`, `p-core`, `sample-agent-app` and a pinned block `test_invariant`,
+all pushed to the maintainer's git remote.
+
+Fix: `tests/_isolate.py`, imported first by every test entry point, points the
+whole process at a throwaway `AGI_MEMORY_DIR`, clears every override that
+outranks it, and aims `CLAUDE_MEM_DB` at a nonexistent file so a developer's
+legacy `~/.claude-mem` database cannot win. One mechanism instead of patching
+leaks block by block, which had missed the next one every time. Verified by
+snapshotting the real store by max ids before a full run of all ten test files
+plus `agi-integrate test`: identical afterwards — no new observations, edges,
+pins, sessions, vault lines or sync commits. `tests/alias_coverage.py` is
+deliberately not isolated; it exists to measure the real vault.
+
+**Kept, per the maintainer's decision**: every leaked fixture record and the
+`test_invariant` pin stay in the real store. Nothing irreplaceable was lost in
+the 01:32 wipe — the only episodic row was a test session, and the code graph
+is regenerated by `agi-memory index`.

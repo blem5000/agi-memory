@@ -1,4 +1,5 @@
 """Offline checks: no LLM, no network (except localhost worker for L1 live test)."""
+import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import os
 import sys
 from pathlib import Path
@@ -320,7 +321,11 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 # Runs against an isolated store so it never depends on the developer's vault.
 with tempfile.TemporaryDirectory() as tmp_dir:
     _prev_db = os.environ.get("AGI_MEMORY_DB")
+    _prev_vault = os.environ.get("AGI_MEMORY_VAULT")
     os.environ["AGI_MEMORY_DB"] = str(Path(tmp_dir) / "miss.db")
+    # The vault does not follow AGI_MEMORY_DB. Isolating only the database let
+    # this test mirror `miss-proj` into the developer's real vault and push it.
+    os.environ["AGI_MEMORY_VAULT"] = str(Path(tmp_dir) / "vault")
     try:
         import importlib
         from agi_memory import config as _cfg, mcp_server as _mcp
@@ -342,6 +347,10 @@ with tempfile.TemporaryDirectory() as tmp_dir:
             os.environ.pop("AGI_MEMORY_DB", None)
         else:
             os.environ["AGI_MEMORY_DB"] = _prev_db
+        if _prev_vault is None:
+            os.environ.pop("AGI_MEMORY_VAULT", None)
+        else:
+            os.environ["AGI_MEMORY_VAULT"] = _prev_vault
         importlib.reload(_cfg)
         importlib.reload(_mcp)
 
@@ -694,7 +703,11 @@ with tempfile.TemporaryDirectory() as inflight_tmp:
     if_dir = Path(inflight_tmp)
     if_db = if_dir / "if_test.db"
     orig_env_db = os.environ.get("AGENT_MEMORY_DB")
+    orig_env_vault = os.environ.get("AGENT_MEMORY_VAULT")
     os.environ["AGENT_MEMORY_DB"] = str(if_db)
+    # Isolate the vault too: without it this test wrote `inflight-proj` into the
+    # developer's real vault, where auto-sync committed and pushed it.
+    os.environ["AGENT_MEMORY_VAULT"] = str(if_dir / "vault")
     try:
         from agi_memory import mcp_server
         from agi_memory.layers.session_layer import SessionLayer
@@ -777,6 +790,10 @@ with tempfile.TemporaryDirectory() as inflight_tmp:
         assert any("SQLite FTS5" in h.text for h in g_hits), f"Expected triple in graph search hits: {[h.text for h in g_hits]}"
 
     finally:
+        if orig_env_vault is not None:
+            os.environ["AGENT_MEMORY_VAULT"] = orig_env_vault
+        else:
+            os.environ.pop("AGENT_MEMORY_VAULT", None)
         if orig_env_db is not None:
             os.environ["AGENT_MEMORY_DB"] = orig_env_db
         else:
@@ -1136,14 +1153,116 @@ with tempfile.TemporaryDirectory() as hook_tmp:
         import io
         from contextlib import redirect_stdout
         f_out = io.StringIO()
-        with redirect_stdout(f_out):
-            hooks.hook_session_start(project="test-proj")
+        # Point the hook at a throwaway database: unscoped, this call wrote a
+        # `test-proj` session into the developer's real store on every run.
+        _prev_db = os.environ.get("AGI_MEMORY_DB")
+        os.environ["AGI_MEMORY_DB"] = str(h_dir / "hook_session.db")
+        try:
+            with redirect_stdout(f_out):
+                hooks.hook_session_start(project="test-proj")
+        finally:
+            if _prev_db is None:
+                os.environ.pop("AGI_MEMORY_DB", None)
+            else:
+                os.environ["AGI_MEMORY_DB"] = _prev_db
         out_str = f_out.getvalue()
         # session-start runs without error (may be empty if no memories for test-proj)
         assert isinstance(out_str, str)
 
     finally:
         os.chdir(orig_cwd)
+
+# 10e. Every layer must import and work in SCRIPT mode, which is how the
+# lifecycle hooks run (`python3 .../hooks.py session-start`). The script-mode
+# import fallback in episodic_layer and code_layer omitted `open_db`, so
+# EpisodicLayer() raised NameError inside the hooks' bare `except: pass`: no
+# real session was ever recorded, and a production vault of ~15,000 memories
+# held exactly one session -- written by this test file. Package-mode tests
+# could not see it, because package mode takes the other import branch.
+_repo_root = Path(__file__).resolve().parent.parent
+with tempfile.TemporaryDirectory() as _sm_tmp:
+    _sm_env = dict(os.environ, AGI_MEMORY_DB=str(Path(_sm_tmp) / "script_mode.db"))
+    _probe = (
+        "import sys; sys.path.insert(0, 'src/agi_memory')\n"
+        "from layers.session_layer import SessionLayer\n"
+        "from layers.episodic_layer import EpisodicLayer\n"
+        "from layers.graph_layer import GraphLayer\n"
+        "from layers.code_layer import CodeLayer\n"
+        "SessionLayer().search('x')\n"
+        "EpisodicLayer().start_session(project='script-mode')\n"
+        "GraphLayer().search('x')\n"
+        "CodeLayer().get_structure('.')\n"
+        "print('SCRIPT_MODE_OK')\n"
+    )
+    _r = _sp.run([sys.executable, "-c", _probe], cwd=str(_repo_root), env=_sm_env,
+                        capture_output=True, text=True, timeout=120)
+    assert "SCRIPT_MODE_OK" in _r.stdout, f"a layer is broken in script mode:\n{_r.stderr[-800:]}"
+
+    # And the real entry point, end to end: the hook must record a session.
+    _hook_db = Path(_sm_tmp) / "hook_e2e.db"
+    _sp.run([sys.executable, str(_repo_root / "src" / "agi_memory" / "hooks.py"), "session-start",
+                    "--project", "script-mode-hook"],
+                   cwd=str(_repo_root), env=dict(os.environ, AGI_MEMORY_DB=str(_hook_db)),
+                   stdin=_sp.DEVNULL, capture_output=True, text=True, timeout=120)
+    assert _hook_db.exists(), "session-start hook created no database"
+    _rows = sqlite3.connect(_hook_db).execute(
+        "SELECT count(*) FROM episodic_sessions WHERE project = 'script-mode-hook'").fetchone()[0]
+    assert _rows == 1, f"session-start hook recorded {_rows} sessions, expected 1"
+
+# 10f. Compaction must not destroy what the vault cannot restore.
+# deduplicate_and_compact used to delete the database file and re-import from
+# the vault. The vault carries only observations and graph rows, so every
+# automatic compaction (weekly, or after 50 new memories) silently wiped pinned
+# core blocks, curated aliases, all episodic sessions and the entire code graph.
+from agi_memory import sync as _sync_guard
+from agi_memory.layers.session_layer import remove_record_listener as _rm_rec
+from agi_memory.layers.graph_layer import remove_edge_listener as _rm_edge
+from agi_memory.vault import deduplicate_and_compact as _compact
+from agi_memory.layers.code_layer import CodeLayer  # noqa: E402  (not bound at module level before this point)
+with tempfile.TemporaryDirectory() as _cp_tmp:
+    _cp_db = Path(_cp_tmp) / "compact.db"
+    _cp_vault = Path(_cp_tmp) / "vault"
+    _cp_prev = {k: os.environ.get(k) for k in ("AGI_MEMORY_DB", "AGI_MEMORY_VAULT")}
+    os.environ["AGI_MEMORY_DB"] = str(_cp_db)
+    os.environ["AGI_MEMORY_VAULT"] = str(_cp_vault)
+    # A debounced sync firing after this block restores the environment would
+    # resolve the developer's REAL paths. Detach it for the duration.
+    _rm_rec(_sync_guard._sync_on_record)
+    _rm_edge(_sync_guard._sync_on_edge)
+    try:
+        _cp_sl = SessionLayer(db_path=_cp_db, project="compact-proj")
+        _cp_sl.record(text="Compaction keeps derived tables consistent.", title="Compaction",
+                      project="compact-proj")
+        _cp_sl.pin_block("compact_pin", "Never delete the database file", category="architecture",
+                         project="compact-proj")
+        GraphLayer(db_path=_cp_db, project="compact-proj").add_alias("cmpx", "CompactionExample")
+        from agi_memory.layers.episodic_layer import EpisodicLayer as _EL_cp
+        _EL_cp(db_path=_cp_db, project="compact-proj").start_session(project="compact-proj")
+        _cp_repo = Path(_cp_tmp) / "repo"; _cp_repo.mkdir()
+        (_cp_repo / "mod.py").write_text("def kept_symbol():\n    return 1\n", encoding="utf-8")
+        CodeLayer(db_path=_cp_db, project="compact-proj").index_directory(_cp_repo, project="compact-proj")
+
+        _compact(vault_dir=_cp_vault, session_db=_cp_db, graph_db=_cp_db)
+
+        _c = sqlite3.connect(_cp_db)
+        assert _c.execute("SELECT count(*) FROM core_memory_blocks WHERE block_key='compact_pin'").fetchone()[0] == 1, \
+            "compaction destroyed a pinned core block"
+        assert _c.execute("SELECT count(*) FROM graph_aliases WHERE alias='cmpx'").fetchone()[0] == 1, \
+            "compaction destroyed a curated alias"
+        assert _c.execute("SELECT count(*) FROM episodic_sessions WHERE project='compact-proj'").fetchone()[0] == 1, \
+            "compaction destroyed episodic session history"
+        assert _c.execute("SELECT count(*) FROM code_symbols WHERE name='kept_symbol'").fetchone()[0] == 1, \
+            "compaction destroyed the code graph"
+        _c.close()
+        assert any("Compaction" in h.text for h in SessionLayer(db_path=_cp_db, project="compact-proj").search("compaction consistent")), \
+            "observations are not searchable after an in-place rebuild"
+    finally:
+        _sync_guard.enable_sync_listeners()
+        for _k, _v in _cp_prev.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
 
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
