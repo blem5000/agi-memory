@@ -380,6 +380,12 @@ def sync(
         has_remote = "origin" in remotes
 
         now = int(time.time())
+        # A store that has never been compacted used to read as compacted at
+        # epoch 0, so the FIRST sync of every fresh install -- usually fired by a
+        # debounced thread seconds after the first memory -- ran a full
+        # compaction. Start the clock instead; the count threshold still applies.
+        if not cfg.get("last_dedupe_epoch"):
+            cfg["last_dedupe_epoch"] = now
         time_since_dedupe = now - cfg.get("last_dedupe_epoch", 0)
         uncompressed_count = cfg.get("observations_since_dedupe", 0)
 
@@ -481,16 +487,25 @@ def schedule_auto_sync(vault_dir: Path | str | None = None, delay_seconds: float
     _debounce_timer.start()
 
 
+def _auto_sync_enabled() -> bool:
+    """`auto_sync` is shown by `sync status` and set by the installers, but
+    nothing ever read it: switching it off still synced after every write."""
+    try:
+        return bool(load_sync_config().get("auto_sync", True))
+    except Exception:
+        return True
+
+
 def _sync_on_record(obs_dict: dict) -> None:
     """Callback triggered on SessionLayer.record to schedule debounced auto-sync."""
-    if not _is_default_db(obs_dict):
+    if not _is_default_db(obs_dict) or not _auto_sync_enabled():
         return
     schedule_auto_sync()
 
 
 def _sync_on_edge(edge_dict: dict) -> None:
     """Callback triggered on GraphLayer.add_edge to schedule debounced auto-sync."""
-    if not _is_default_db(edge_dict):
+    if not _is_default_db(edge_dict) or not _auto_sync_enabled():
         return
     schedule_auto_sync()
 

@@ -34,4 +34,13 @@ for _var in ("AGI_MEMORY_DB", "AGENT_MEMORY_DB",
 os.environ["AGI_MEMORY_DIR"] = _ROOT
 os.environ["CLAUDE_MEM_DB"] = os.path.join(_ROOT, "no-legacy-claude-mem.db")
 
+# No debounced background sync in test processes. A write schedules a sync three
+# seconds later on a daemon thread, which then opens whatever database the test
+# was using -- often after the test has moved on. On Windows that thread holding
+# a temp database open made TemporaryDirectory cleanup fail (WinError 32), and a
+# process exiting mid-compaction could leave a table half rebuilt. Tests that
+# exercise sync call sync() directly.
+with open(os.path.join(_ROOT, "sync.json"), "w", encoding="utf-8") as _f:
+    _f.write('{"auto_sync": false}')
+
 atexit.register(shutil.rmtree, _ROOT, ignore_errors=True)

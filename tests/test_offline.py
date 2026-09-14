@@ -1323,6 +1323,97 @@ with tempfile.TemporaryDirectory() as _ms_tmp:
     _mcp_calls([("memory_recall", {"query": "anything"})])
     assert _session_count() == 1, f"a second MCP process duplicated the session: {_session_count()}"
 
+# 10h. A rebuild interrupted after its delete must lose nothing.
+# Compaction used to commit a DELETE of every observation and only then
+# re-import from the vault. A process exiting in between -- an MCP server or CLI
+# whose debounced sync thread was mid-compaction when stdin closed -- left the
+# observations table empty. Delete and re-insert now share one transaction.
+from agi_memory import vault as _vault_atomic
+from agi_memory import sync as _sync_atomic
+with tempfile.TemporaryDirectory() as _at_tmp:
+    _at_db = Path(_at_tmp) / "atomic.db"
+    _at_vault = Path(_at_tmp) / "vault"
+    _at_prev = {k: os.environ.get(k) for k in ("AGI_MEMORY_DB", "AGI_MEMORY_VAULT")}
+    os.environ["AGI_MEMORY_DB"] = str(_at_db)
+    os.environ["AGI_MEMORY_VAULT"] = str(_at_vault)
+    try:
+        _at_sl = SessionLayer(db_path=_at_db, project="atomic-proj")
+        for _i in range(3):
+            _at_sl.record(text=f"Atomic rebuild fixture number {_i} with enough words to keep.",
+                          title=f"Atomic {_i}", project="atomic-proj")
+        _vault_atomic.export_dirty_to_vault(vault_dir=_at_vault, session_db=_at_db, graph_db=_at_db)
+
+        def _obs_count():
+            _con = sqlite3.connect(_at_db)
+            try:
+                return _con.execute("SELECT count(*) FROM observations").fetchone()[0]
+            finally:
+                _con.close()
+        _before = _obs_count()
+        assert _before == 3, _before
+
+        # Interrupt the rebuild after its DELETE has executed.
+        _real_tombstones = _vault_atomic.load_tombstones
+        def _die(*_a, **_k):
+            raise RuntimeError("simulated process death mid-rebuild")
+        _vault_atomic.load_tombstones = _die
+        try:
+            _vault_atomic.import_from_vault(vault_dir=_at_vault, session_db=_at_db, graph_db=_at_db, replace=True)
+            raise AssertionError("the simulated interruption did not fire")
+        except RuntimeError:
+            pass
+        finally:
+            _vault_atomic.load_tombstones = _real_tombstones
+        assert _obs_count() == _before, f"an interrupted rebuild lost observations: {_before} -> {_obs_count()}"
+
+        # And an uninterrupted replace restores exactly what the vault holds.
+        _vault_atomic.import_from_vault(vault_dir=_at_vault, session_db=_at_db, graph_db=_at_db, replace=True)
+        assert _obs_count() == _before, f"replace rebuild changed the count: {_before} -> {_obs_count()}"
+    finally:
+        for _k, _v in _at_prev.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+
+# A fresh store's first sync must not compact: it read "never compacted" as
+# "compacted at epoch 0", so every install compacted seconds after its first
+# memory, usually from a background thread.
+with tempfile.TemporaryDirectory() as _fs_tmp:
+    _fs_vault = Path(_fs_tmp) / "vault"
+    _fs_calls = []
+    _real_compact = _sync_atomic.deduplicate_and_compact
+    _real_load = _sync_atomic.load_sync_config
+    _real_save = _sync_atomic.save_sync_config
+    _fs_cfg = {}
+    _sync_atomic.deduplicate_and_compact = lambda *a, **k: _fs_calls.append(1) or {"observations_pruned": 0}
+    _sync_atomic.load_sync_config = lambda: dict(_fs_cfg)
+    _sync_atomic.save_sync_config = lambda c: _fs_cfg.update(c)
+    try:
+        _sync_atomic.sync(vault_dir=_fs_vault, push=False, pull=False)
+    finally:
+        _sync_atomic.deduplicate_and_compact = _real_compact
+        _sync_atomic.load_sync_config = _real_load
+        _sync_atomic.save_sync_config = _real_save
+    assert not _fs_calls, "the first sync of a fresh store ran a compaction"
+    assert _fs_cfg.get("last_dedupe_epoch"), "the first sync must start the compaction clock"
+
+# auto_sync=false must actually stop the background sync it claims to disable.
+_real_sched = _sync_atomic.schedule_auto_sync
+_sched_calls = []
+_sync_atomic.schedule_auto_sync = lambda *a, **k: _sched_calls.append(1)
+_real_load2 = _sync_atomic.load_sync_config
+try:
+    _sync_atomic.load_sync_config = lambda: {"auto_sync": False}
+    _sync_atomic._sync_on_record({"db_path": None})
+    assert not _sched_calls, "auto_sync=false still scheduled a background sync"
+    _sync_atomic.load_sync_config = lambda: {"auto_sync": True}
+    _sync_atomic._sync_on_record({"db_path": None})
+    assert _sched_calls, "auto_sync=true no longer schedules a sync"
+finally:
+    _sync_atomic.schedule_auto_sync = _real_sched
+    _sync_atomic.load_sync_config = _real_load2
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)

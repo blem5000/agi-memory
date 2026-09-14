@@ -410,9 +410,18 @@ def _active_dbs(session_db, graph_db) -> tuple:
 def import_from_vault(
     vault_dir: Path | str | None = None,
     session_db: Path | str | None = None,
-    graph_db: Path | str | None = None
+    graph_db: Path | str | None = None,
+    replace: bool = False,
 ) -> dict[str, int]:
-    """Import records from vault JSONL files into local SQLite tables idempotently."""
+    """Import records from vault JSONL files into local SQLite tables idempotently.
+
+    replace=True rebuilds the vault-derived tables (observations, graph nodes and
+    edges) from the vault, deleting and re-inserting inside ONE transaction per
+    database. It used to be a separate delete, committed, followed by this
+    import: a process that exited in between -- an MCP server or CLI whose
+    debounced background sync was mid-compaction when stdin closed -- left the
+    observations table empty. A transaction either lands whole or not at all.
+    """
     v_dir = init_vault(vault_dir)
     s_db, g_db = _active_dbs(session_db, graph_db)
 
@@ -428,100 +437,111 @@ def import_from_vault(
         SessionLayer._init_db(s_db)
 
         con = open_db(s_db)
-        existing_hashes = set(
-            r[0] for r in con.execute("SELECT content_hash FROM observations WHERE content_hash IS NOT NULL").fetchall()
-        )
-
-        tombstoned = load_tombstones(v_dir)
-        rows_to_insert = []
-        with open(obs_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if d.get("_tombstone"):
-                    continue  # a deletion marker, not a memory
-                ch = d.get("content_hash") or d.get("guid")
-                if not ch:
-                    ch = compute_guid(d.get("project", ""), d.get("title", ""),
-                                      d.get("narrative", "") + d.get("facts", ""))
-                if ch in existing_hashes or ch in tombstoned:
-                    continue
-
-                rows_to_insert.append((
-                    d.get("memory_session_id", "sync"),
-                    d.get("project"),
-                    d.get("type", "observation"),
-                    d.get("title", ""),
-                    d.get("subtitle", ""),
-                    d.get("facts", ""),
-                    d.get("narrative", ""),
-                    d.get("concepts", ""),
-                    d.get("files_read", ""),
-                    d.get("files_modified", ""),
-                    d.get("prompt_number", 0),
-                    d.get("discovery_tokens", 0),
-                    d.get("created_at", ""),
-                    d.get("created_at_epoch", int(time.time())),
-                    ch,
-                    d.get("generated_by_model", "sync"),
-                    d.get("relevance_count", 0),
-                    d.get("sync_rev", "vault"),
-                    d.get("rationale"),
-                    d.get("supersedes_refs"),
-                    d.get("origin")
-                ))
-                existing_hashes.add(ch)
-
-        if rows_to_insert:
-            con.executemany("""
-                INSERT OR IGNORE INTO observations (
-                    memory_session_id, project, type, title, subtitle, facts,
-                    narrative, concepts, files_read, files_modified, prompt_number,
-                    discovery_tokens, created_at, created_at_epoch, content_hash,
-                    generated_by_model, relevance_count, sync_rev, rationale,
-                    supersedes_refs, origin
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, rows_to_insert)
-            con.commit()
-            imported_obs = len(rows_to_insert)
-
-        # Re-link supersession. `superseded_by` holds a row id, which is local to
-        # the machine that wrote it, so a memory imported here would otherwise
-        # arrive with its chain broken: the replacement present, the record it
-        # replaced still reading as current. The content hashes travel with the
-        # record, so resolve them to local ids now.
         try:
-            by_hash = {
-                r[1]: r[0]
-                for r in con.execute(
-                    "SELECT id, content_hash FROM observations WHERE content_hash IS NOT NULL")
-            }
-            for new_id, refs_raw in con.execute(
-                "SELECT id, supersedes_refs FROM observations "
-                "WHERE supersedes_refs IS NOT NULL AND supersedes_refs != ''"
-            ).fetchall():
-                try:
-                    refs = json.loads(refs_raw)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-                for ref in refs if isinstance(refs, list) else []:
-                    old_id = by_hash.get(ref)
-                    if old_id is None or old_id == new_id:
+            if replace:
+                # No commit here: the delete and the inserts below share a transaction.
+                con.execute("DELETE FROM observations")
+            existing_hashes = set(
+                r[0] for r in con.execute("SELECT content_hash FROM observations WHERE content_hash IS NOT NULL").fetchall()
+            )
+
+            tombstoned = load_tombstones(v_dir)
+            rows_to_insert = []
+            with open(obs_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
                         continue
-                    con.execute(
-                        "UPDATE observations SET type = 'superseded', superseded_by = ? "
-                        "WHERE id = ? AND (superseded_by IS NULL OR type != 'superseded')",
-                        (new_id, old_id))
-            con.commit()
-        except sqlite3.Error:
-            # A broken chain must not fail the import; the memories still arrive.
-            pass
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    if d.get("_tombstone"):
+                        continue  # a deletion marker, not a memory
+                    ch = d.get("content_hash") or d.get("guid")
+                    if not ch:
+                        ch = compute_guid(d.get("project", ""), d.get("title", ""),
+                                          d.get("narrative", "") + d.get("facts", ""))
+                    if ch in existing_hashes or ch in tombstoned:
+                        continue
+
+                    rows_to_insert.append((
+                        d.get("memory_session_id", "sync"),
+                        d.get("project"),
+                        d.get("type", "observation"),
+                        d.get("title", ""),
+                        d.get("subtitle", ""),
+                        d.get("facts", ""),
+                        d.get("narrative", ""),
+                        d.get("concepts", ""),
+                        d.get("files_read", ""),
+                        d.get("files_modified", ""),
+                        d.get("prompt_number", 0),
+                        d.get("discovery_tokens", 0),
+                        d.get("created_at", ""),
+                        d.get("created_at_epoch", int(time.time())),
+                        ch,
+                        d.get("generated_by_model", "sync"),
+                        d.get("relevance_count", 0),
+                        d.get("sync_rev", "vault"),
+                        d.get("rationale"),
+                        d.get("supersedes_refs"),
+                        d.get("origin")
+                    ))
+                    existing_hashes.add(ch)
+
+            if rows_to_insert:
+                con.executemany("""
+                    INSERT OR IGNORE INTO observations (
+                        memory_session_id, project, type, title, subtitle, facts,
+                        narrative, concepts, files_read, files_modified, prompt_number,
+                        discovery_tokens, created_at, created_at_epoch, content_hash,
+                        generated_by_model, relevance_count, sync_rev, rationale,
+                        supersedes_refs, origin
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows_to_insert)
+                imported_obs = len(rows_to_insert)
+            con.commit()  # delete (when replacing) and inserts land together
+
+            # Re-link supersession. `superseded_by` holds a row id, which is local to
+            # the machine that wrote it, so a memory imported here would otherwise
+            # arrive with its chain broken: the replacement present, the record it
+            # replaced still reading as current. The content hashes travel with the
+            # record, so resolve them to local ids now.
+            try:
+                by_hash = {
+                    r[1]: r[0]
+                    for r in con.execute(
+                        "SELECT id, content_hash FROM observations WHERE content_hash IS NOT NULL")
+                }
+                for new_id, refs_raw in con.execute(
+                    "SELECT id, supersedes_refs FROM observations "
+                    "WHERE supersedes_refs IS NOT NULL AND supersedes_refs != ''"
+                ).fetchall():
+                    try:
+                        refs = json.loads(refs_raw)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    for ref in refs if isinstance(refs, list) else []:
+                        old_id = by_hash.get(ref)
+                        if old_id is None or old_id == new_id:
+                            continue
+                        con.execute(
+                            "UPDATE observations SET type = 'superseded', superseded_by = ? "
+                            "WHERE id = ? AND (superseded_by IS NULL OR type != 'superseded')",
+                            (new_id, old_id))
+                con.commit()
+            except sqlite3.Error:
+                # A broken chain must not fail the import; the memories still arrive.
+                pass
+        except BaseException:
+            # An exception with the transaction still open left the database
+            # locked for every later writer. Roll back so an interrupted
+            # rebuild leaves the previous rows readable AND writable.
+            con.rollback()
+            con.close()
+            raise
         con.close()
 
     # 2. Import graph nodes and edges into graph_db
@@ -530,70 +550,65 @@ def import_from_vault(
         gl = GraphLayer(db_path=g_db)
 
         con = open_db(g_db)
-        with open(graph_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        try:
+            if replace:
+                # Shares the transaction committed after the inserts below.
+                con.execute("DELETE FROM graph_edges")
+                con.execute("DELETE FROM graph_nodes")
+            with open(graph_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                kind = d.get("kind")
-                if kind == "node":
-                    name = gl.resolve_node(d.get("name", "")) if hasattr(gl, "resolve_node") else d.get("name", "")
-                    con.execute("""
-                        INSERT INTO graph_nodes (name, entity_type, description, project)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(name) DO UPDATE SET
-                            description = CASE WHEN excluded.description != '' THEN excluded.description ELSE graph_nodes.description END,
-                            project = excluded.project
-                    """, (name, d.get("entity_type", "concept"), d.get("description", ""), d.get("project", "")))
-                    imported_graph += 1
-                elif kind == "edge":
-                    src = gl.resolve_node(d.get("source", "")) if hasattr(gl, "resolve_node") else d.get("source", "")
-                    tgt = gl.resolve_node(d.get("target", "")) if hasattr(gl, "resolve_node") else d.get("target", "")
-                    rel = d.get("relation", "RELATES_TO")
-                    fact = d.get("fact", "")
-                    proj = d.get("project", "")
-                    is_active = int(d.get("is_active", 1) if d.get("is_active") is not None else 1)
-                    valid_from = d.get("valid_from")
-                    valid_until = d.get("valid_until")
-                    superseded_by = d.get("superseded_by")
-                    con.execute("""
-                        INSERT INTO graph_edges (
-                            source, relation, target, fact, project,
-                            is_active, valid_from, valid_until, superseded_by
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?)
-                        ON CONFLICT(source, relation, target, fact, project) DO UPDATE SET
-                            is_active = excluded.is_active,
-                            valid_until = excluded.valid_until,
-                            superseded_by = excluded.superseded_by
-                    """, (src, rel, tgt, fact, proj, is_active, valid_from, valid_until, superseded_by))
-                    imported_graph += 1
-        con.commit()
+                    kind = d.get("kind")
+                    if kind == "node":
+                        name = gl.resolve_node(d.get("name", "")) if hasattr(gl, "resolve_node") else d.get("name", "")
+                        con.execute("""
+                            INSERT INTO graph_nodes (name, entity_type, description, project)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(name) DO UPDATE SET
+                                description = CASE WHEN excluded.description != '' THEN excluded.description ELSE graph_nodes.description END,
+                                project = excluded.project
+                        """, (name, d.get("entity_type", "concept"), d.get("description", ""), d.get("project", "")))
+                        imported_graph += 1
+                    elif kind == "edge":
+                        src = gl.resolve_node(d.get("source", "")) if hasattr(gl, "resolve_node") else d.get("source", "")
+                        tgt = gl.resolve_node(d.get("target", "")) if hasattr(gl, "resolve_node") else d.get("target", "")
+                        rel = d.get("relation", "RELATES_TO")
+                        fact = d.get("fact", "")
+                        proj = d.get("project", "")
+                        is_active = int(d.get("is_active", 1) if d.get("is_active") is not None else 1)
+                        valid_from = d.get("valid_from")
+                        valid_until = d.get("valid_until")
+                        superseded_by = d.get("superseded_by")
+                        con.execute("""
+                            INSERT INTO graph_edges (
+                                source, relation, target, fact, project,
+                                is_active, valid_from, valid_until, superseded_by
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?)
+                            ON CONFLICT(source, relation, target, fact, project) DO UPDATE SET
+                                is_active = excluded.is_active,
+                                valid_until = excluded.valid_until,
+                                superseded_by = excluded.superseded_by
+                        """, (src, rel, tgt, fact, proj, is_active, valid_from, valid_until, superseded_by))
+                        imported_graph += 1
+            con.commit()
+        except BaseException:
+            # An exception with the transaction still open left the database
+            # locked for every later writer. Roll back so an interrupted
+            # rebuild leaves the previous rows readable AND writable.
+            con.rollback()
+            con.close()
+            raise
         con.close()
 
     return {"observations": imported_obs, "graph": imported_graph}
-
-
-def _clear_derived_tables(db: Path, tables: tuple, fts_tables: tuple) -> None:
-    """Empty only the tables the vault can repopulate; leave every other table."""
-    if not db.exists():
-        return
-    con = open_db(db)
-    try:
-        for t in tables:
-            try:
-                con.execute(f"DELETE FROM {t}")
-            except sqlite3.Error:
-                pass  # table not created yet in this database
-        con.commit()
-    finally:
-        con.close()
-    _rebuild_fts(db, fts_tables)
 
 
 def _rebuild_fts(db: Path, fts_tables: tuple) -> None:
@@ -777,14 +792,7 @@ def deduplicate_and_compact(
     # episodic session and event, and the entire code graph. It ran automatically
     # on a schedule, so every user lost those periodically without being told.
     # Only the tables the vault can repopulate are cleared now.
-    if obs_file.exists():
-        _clear_derived_tables(s_db, ("observations",), ("observations_fts",))
-    if graph_file.exists():
-        _clear_derived_tables(g_db, ("graph_edges", "graph_nodes"),
-                              ("graph_edges_fts", "graph_nodes_fts"))
-    import_from_vault(vault_dir=v_dir,
-                      session_db=s_db if obs_file.exists() else None,
-                      graph_db=g_db if graph_file.exists() else None)
+    import_from_vault(vault_dir=v_dir, session_db=s_db, graph_db=g_db, replace=True)
     for db, fts_tables in ((s_db, ("observations_fts",)),
                            (g_db, ("graph_edges_fts", "graph_nodes_fts"))):
         _rebuild_fts(db, fts_tables)
