@@ -659,15 +659,11 @@ def _spawn_detached_check(vault_dir: Path | str | None = None) -> bool:
         args = [sys.executable or "python3", script, "check"]
         if vault_dir:
             args += ["--vault-dir", str(vault_dir)]
-        # Pin cwd to the vault (or home): inheriting the caller's cwd keeps
-        # e.g. a test's TemporaryDirectory locked on Windows until the
-        # detached child exits, breaking cleanup.
+        # Pin cwd to home: inheriting the caller's cwd keeps e.g. a test's
+        # TemporaryDirectory (or the vault itself) locked on Windows until
+        # the detached child exits, breaking cleanup. All paths are absolute.
         try:
-            _cwd = None
-            if vault_dir and Path(vault_dir).is_dir():
-                _cwd = str(vault_dir)
-            else:
-                _cwd = str(Path.home())
+            _cwd = str(Path.home())
         except Exception:
             _cwd = None
         kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL,

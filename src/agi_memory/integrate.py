@@ -1258,6 +1258,15 @@ def cmd_sync(args: argparse.Namespace) -> None:
         print(f"  Remote URL:   {st['remote_url'] or '(none)'}")
         print(f"  Auto-sync:    {'Enabled' if st['auto_sync'] else 'Disabled'}")
         print(f"  Sync Status:  {st['last_sync_status']}")
+        if st.get("remote_url"):
+            _b, _a = int(st.get("behind", 0) or 0), int(st.get("ahead", 0) or 0)
+            _cs = st.get("last_check_state", "unknown")
+            if _cs == "unknown":
+                print("  Freshness:    not checked yet (checked on session start)")
+            elif _b == 0 and _a == 0:
+                print("  Freshness:    in sync with remote")
+            else:
+                print(f"  Freshness:    {_a} ahead / {_b} behind remote")
         if st["last_sync_epoch"]:
             t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["last_sync_epoch"]))
             print(f"  Last Synced:  {t_str}")
