@@ -472,10 +472,21 @@ def call_tool(name, args):
         action = str(args.get("action", "sync")).lower()
         if action == "status":
             st = sync.sync_status()
-            return (f"Vault: {st['vault_dir']}\n"
-                    f"Remote: {st['remote_url'] or '(none)'}\n"
-                    f"Status: {st['last_sync_status']}\n"
-                    f"Auto-sync: {st['auto_sync']}")
+            lines = [f"Vault: {st['vault_dir']}",
+                     f"Remote: {st['remote_url'] or '(none)'}",
+                     f"Status: {st['last_sync_status']}",
+                     f"Auto-sync: {st['auto_sync']}"]
+            if st.get("remote_url"):
+                behind = int(st.get("behind", 0) or 0)
+                ahead = int(st.get("ahead", 0) or 0)
+                state = st.get("last_check_state", "unknown")
+                if state == "unknown":
+                    lines.append("Freshness: not checked yet (checked on session start)")
+                elif behind == 0 and ahead == 0:
+                    lines.append("Freshness: in sync with remote")
+                else:
+                    lines.append(f"Freshness: {ahead} ahead / {behind} behind remote")
+            return "\n".join(lines)
         elif action == "dedupe":
             d = vault.deduplicate_and_compact()
             sync.schedule_auto_sync()
@@ -591,11 +602,10 @@ def run_mcp_server():
                 reply(mid, {"protocolVersion": "2024-11-05",
                             "capabilities": {"tools": {}},
                             "serverInfo": {"name": "agi-memory", "version": __version__}})
-                # Trigger initial background pull to sync multi-device memories
+                # Interval-gated background freshness check: pulls when the vault
+                # is behind, pushes when ahead. Returns instantly.
                 try:
-                    import threading
-                    t = threading.Thread(target=sync.sync, kwargs={"push": False, "pull": True}, daemon=True)
-                    t.start()
+                    sync.ensure_fresh_background()
                 except Exception:
                     pass
             elif method == "ping":

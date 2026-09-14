@@ -30,4 +30,26 @@ agi-sync dedupe
 agi-sync init git@github.com:username/my-agi-memory-vault.git
 ```
 
+### Automatic freshness checks
+
+The client checks whether a sync is needed without being asked:
+
+- **`session-start` hook / MCP `initialize`** call `ensure_fresh_background()`:
+  it returns the last-known status instantly and, at most once per
+  `AGI_MEMORY_SYNC_CHECK_INTERVAL` (default 900s), spawns a *detached*
+  background process that fetches, pulls when behind (rebase + re-import)
+  and pushes when ahead. A detached process (not a thread) because hooks
+  and CLIs exit too fast for a thread to finish.
+- When the vault is behind/ahead, the startup context gains a `## Vault Sync`
+  line telling the agent a background sync is running.
+- `memory_sync` (`action: status`), `agi-integrate sync status` and
+  `agi-sync status` report cached `behind` / `ahead` counts — no network
+  involved. `sync.py check` forces a one-shot check.
+
+```bash
+AGI_MEMORY_SYNC_CHECK_INTERVAL=300  # check at most every 5 minutes (0 disables)
+AGI_MEMORY_SYNC_FETCH_TIMEOUT=10    # seconds per fetch attempt
+AGI_MEMORY_SYNC_CONFIG_FILE=~/.agi-memory/sync.json  # config override (tests)
+```
+
 ---
