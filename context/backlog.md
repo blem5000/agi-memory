@@ -854,9 +854,15 @@ Guarded in `test_offline.py` with a canary: write to a temp database, assert the
 real vault's files did not grow and the canary is absent. Verified sensitive by
 removing the scoping and watching it fail.
 
-**Not yet done**: the 227 records are still in the maintainer's vault and on its
-remote. Removing them is a data operation on somebody's real store, so it waits
-for an explicit decision rather than being tidied away here.
+**Decided 2026-09-14: the 227 records stay.** The maintainer's call — nothing is
+discarded. They are indistinguishable from real memories only in shape, not in
+consequence: they sit under project names (`p`, `usage`, `x`, `mod-proj`, `hop`,
+`p-render`, `p-leakcheck`) that no real work uses, so project-scoped recall
+never surfaces them, and the vault is append-only by design. A later session
+must not "tidy" them: deleting from an append-only store means tombstones that
+propagate to every machine, which is a larger and more permanent act than the
+mess it cleans. They are also now the only real-world sample of what the leak
+looked like, which is worth keeping while item 17's fix is young.
 
 **The wider lesson**: ambient module-level listeners that act on global config
 are invisible at the call site. Nothing in a test that says
