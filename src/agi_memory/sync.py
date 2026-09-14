@@ -53,12 +53,21 @@ _sync_lock = threading.Lock()
 _debounce_timer: Optional[threading.Timer] = None
 
 
+def _sync_config_file() -> Path:
+    """Sync config path; AGI_MEMORY_SYNC_CONFIG_FILE overrides (tests, detached workers)."""
+    env = (os.environ.get("AGI_MEMORY_SYNC_CONFIG_FILE") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    return SYNC_CONFIG_FILE
+
+
 def load_sync_config() -> dict[str, Any]:
     """Load sync configuration from ~/.agent-memory/sync.json."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if SYNC_CONFIG_FILE.exists():
+    cfg_file = _sync_config_file()
+    if cfg_file.exists():
         try:
-            return json.loads(SYNC_CONFIG_FILE.read_text(encoding="utf-8"))
+            return json.loads(cfg_file.read_text(encoding="utf-8"))
         except Exception:
             pass
     return {
@@ -73,10 +82,11 @@ def load_sync_config() -> dict[str, Any]:
 
 def save_sync_config(cfg: dict[str, Any]) -> None:
     """Save sync configuration atomically."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = SYNC_CONFIG_FILE.with_suffix(".tmp")
+    cfg_file = _sync_config_file()
+    cfg_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cfg_file.with_suffix(".tmp")
     tmp.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    tmp.replace(SYNC_CONFIG_FILE)
+    tmp.replace(cfg_file)
 
 
 def check_gh() -> dict[str, Any]:
@@ -455,6 +465,11 @@ def sync(
 
         cfg["last_sync_epoch"] = now
         cfg["last_sync_status"] = sync_status
+        if sync_status == "synced":
+            cfg["behind"] = 0
+            cfg["ahead"] = 0
+            cfg["last_check_epoch"] = now
+            cfg["last_check_state"] = "in_sync"
         save_sync_config(cfg)
 
         return {
@@ -520,6 +535,232 @@ def enable_sync_listeners() -> None:
 enable_sync_listeners()
 
 
+def _check_interval_seconds() -> int:
+    """How often background freshness checks may hit the network (default 15 min).
+
+    0 or negative disables automatic checks (manual `sync now` still works).
+    """
+    try:
+        return int(os.environ.get("AGI_MEMORY_SYNC_CHECK_INTERVAL", "900") or "900")
+    except ValueError:
+        return 900
+
+
+def _check_fetch_timeout() -> int:
+    try:
+        return max(2, int(os.environ.get("AGI_MEMORY_SYNC_FETCH_TIMEOUT", "10") or "10"))
+    except ValueError:
+        return 10
+
+
+def _ahead_behind(v_dir: Path) -> Optional[Tuple[int, int]]:
+    """(ahead, behind) vs origin/main, or None when unresolvable. No network."""
+    rc_a, out_a, _ = _run_git(["rev-list", "--count", "origin/main..HEAD"], cwd=v_dir)
+    rc_b, out_b, _ = _run_git(["rev-list", "--count", "HEAD..origin/main"], cwd=v_dir)
+    if rc_a != 0 or rc_b != 0:
+        return None
+    try:
+        return int(out_a.strip()), int(out_b.strip())
+    except ValueError:
+        return None
+
+
+def check_freshness(vault_dir: Path | str | None = None, do_fetch: bool = True) -> Dict[str, Any]:
+    """Ask the remote whether this vault needs a sync. Never raises, never writes memories.
+
+    With ``do_fetch=True`` this hits the network once (short timeout) and caches
+    the result in sync.json; with ``False`` it only reports the cached values,
+    which makes it safe for hot paths like `session-start` and `status`.
+    States: in_sync | behind | ahead | diverged | offline | no_remote | local_only.
+    """
+    now = int(time.time())
+    res: Dict[str, Any] = {"state": "unknown", "behind": 0, "ahead": 0,
+                           "checked_epoch": 0, "remote": None}
+    try:
+        v_dir = init_vault(vault_dir)
+        cfg = load_sync_config()
+        res["remote"] = cfg.get("remote_url")
+        if not (v_dir / ".git").exists():
+            res["state"] = "local_only"
+            return res
+        _, remotes, _ = _run_git(["remote", "-v"], cwd=v_dir)
+        if "origin" not in remotes:
+            res["state"] = "no_remote"
+            return res
+        if do_fetch:
+            rc, _, _ = _run_git(["fetch", "origin", "main"], cwd=v_dir,
+                                timeout=_check_fetch_timeout())
+            if rc != 0:
+                # Offline (or remote gone): keep serving local memories, say so,
+                # and persist the attempt so callers back off instead of
+                # retrying on every keystroke.
+                res["state"] = "offline"
+                res["behind"] = int(cfg.get("behind", 0))
+                res["ahead"] = int(cfg.get("ahead", 0))
+                res["checked_epoch"] = now
+                try:
+                    cfg["last_check_epoch"] = now
+                    cfg["last_check_state"] = "offline"
+                    save_sync_config(cfg)
+                except Exception:
+                    pass
+                return res
+        counts = _ahead_behind(v_dir)
+        if counts is None:
+            # No origin/main yet (empty remote) or unborn HEAD: nothing to compare.
+            res["state"] = "in_sync"
+            res["checked_epoch"] = now
+        else:
+            ahead, behind = counts
+            res.update(ahead=ahead, behind=behind, checked_epoch=now)
+            res["state"] = ("in_sync" if (ahead == 0 and behind == 0)
+                            else "diverged" if (ahead > 0 and behind > 0)
+                            else "ahead" if ahead > 0 else "behind")
+        try:
+            cfg["behind"] = res["behind"]
+            cfg["ahead"] = res["ahead"]
+            cfg["last_check_epoch"] = res["checked_epoch"]
+            cfg["last_check_state"] = res["state"]
+            save_sync_config(cfg)
+        except Exception:
+            pass
+        return res
+    except Exception:
+        return res
+
+
+# A check started less than this ago suppresses duplicate spawns from
+# concurrent short-lived processes. Deliberately much shorter than the check
+# interval: if a worker dies mid-flight, the next caller retries soon.
+_STARTED_GUARD_SECONDS = 120
+
+
+def _spawn_detached_check(vault_dir: Path | str | None = None) -> bool:
+    """Fire-and-forget freshness check in a detached process. Never raises.
+
+    Threads die with short-lived parents (hooks, CLI), so the check runs as
+    `python sync.py check` detached from this process tree: DEVNULL stdio,
+    no console window on Windows, new session on POSIX.
+    """
+    try:
+        from agi_memory import sync as _self  # noqa: F401  (resolves our own file)
+        script = str(Path(_self.__file__).resolve())
+        src_dir = str(Path(script).resolve().parent.parent)
+    except Exception:
+        try:
+            script = str(Path(__file__).resolve())
+            src_dir = str(Path(script).resolve().parent.parent)
+        except Exception:
+            return False
+    try:
+        env = dict(os.environ)
+        pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = src_dir + (os.pathsep + pp if pp else "")
+        args = [sys.executable or "python3", script, "check"]
+        if vault_dir:
+            args += ["--vault-dir", str(vault_dir)]
+        # Pin cwd to the vault (or home): inheriting the caller's cwd keeps
+        # e.g. a test's TemporaryDirectory locked on Windows until the
+        # detached child exits, breaking cleanup.
+        try:
+            _cwd = None
+            if vault_dir and Path(vault_dir).is_dir():
+                _cwd = str(vault_dir)
+            else:
+                _cwd = str(Path.home())
+        except Exception:
+            _cwd = None
+        kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL,
+                                  "stdout": subprocess.DEVNULL,
+                                  "stderr": subprocess.DEVNULL,
+                                  "env": env, "close_fds": True}
+        if _cwd:
+            kwargs["cwd"] = _cwd
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "DETACHED_PROCESS", 0)
+            creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            kwargs["creationflags"] = creationflags
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(args, **kwargs)  # noqa: S603 — fixed argv, ours
+        return True
+    except Exception:
+        return False
+
+
+def run_check_once(vault_dir: Path | str | None = None) -> Dict[str, Any]:
+    """Entry point for the detached checker: fetch, then pull/push only if needed."""
+    fresh = check_freshness(vault_dir=vault_dir, do_fetch=True)
+    try:
+        if fresh["state"] in ("behind", "diverged", "ahead"):
+            sync(vault_dir=vault_dir,
+                 push=fresh["state"] in ("ahead", "diverged"),
+                 pull=fresh["state"] in ("behind", "diverged"))
+            return check_freshness(vault_dir=vault_dir, do_fetch=False)
+    except Exception:
+        pass
+    return fresh
+
+
+def ensure_fresh_background(vault_dir: Path | str | None = None) -> Dict[str, Any]:
+    """Interval-gated fire-and-forget freshness check + conditional sync.
+
+    Returns the last-known status instantly (never blocks, never raises); at most
+    once per AGI_MEMORY_SYNC_CHECK_INTERVAL it spawns a *detached process* that
+    fetches, pulls when behind (rebase + re-import) and pushes when ahead.
+    A process (not a thread) because hooks and CLI exits would kill a thread
+    mid-flight. This is what `session-start` and MCP `initialize` call.
+    """
+    try:
+        cfg = load_sync_config()
+    except Exception:
+        return {"state": "unknown", "behind": 0, "ahead": 0, "checked_epoch": 0}
+    cached: Dict[str, Any] = {"state": str(cfg.get("last_check_state", "unknown")),
+                              "behind": int(cfg.get("behind", 0) or 0),
+                              "ahead": int(cfg.get("ahead", 0) or 0),
+                              "checked_epoch": int(cfg.get("last_check_epoch", 0) or 0),
+                              "remote": cfg.get("remote_url")}
+    interval = _check_interval_seconds()
+    if interval <= 0 or not cfg.get("auto_sync", True):
+        return cached
+    now = int(time.time())
+    if now - cached["checked_epoch"] < interval and cached["state"] != "unknown":
+        return cached
+    try:
+        started = int(cfg.get("last_check_started_epoch", 0) or 0)
+    except (TypeError, ValueError):
+        started = 0
+    if now - started < _STARTED_GUARD_SECONDS:
+        return cached  # a worker (possibly from a sibling process) is on it
+    try:
+        cfg["last_check_started_epoch"] = now
+        save_sync_config(cfg)
+    except Exception:
+        pass
+    _spawn_detached_check(vault_dir)
+    return cached
+
+
+def format_freshness_line(fresh: Dict[str, Any] | None) -> str:
+    """One-line agent-facing freshness note, or '' when clean/unknown."""
+    if not fresh:
+        return ""
+    behind = int(fresh.get("behind", 0) or 0)
+    ahead = int(fresh.get("ahead", 0) or 0)
+    state = str(fresh.get("state", "unknown"))
+    if state in ("behind", "diverged") and behind > 0:
+        extra = f" ({ahead} local commit(s) also unpushed)" if ahead > 0 else ""
+        return (f"[agent-memory] Vault is {behind} commit(s) behind remote{extra} — "
+                f"background sync started, memories from other machines are on the way.")
+    if state == "ahead" and ahead > 0:
+        return (f"[agent-memory] {ahead} local vault commit(s) not yet pushed — "
+                f"pushing in background.")
+    if state == "offline":
+        return ("[agent-memory] Vault remote unreachable (offline?) — "
+                "working from local memories.")
+    return ""
+
+
 def sync_status() -> dict[str, Any]:
     """Retrieve current synchronization status and diagnostics."""
     v_dir = get_vault_dir()
@@ -533,6 +774,10 @@ def sync_status() -> dict[str, Any]:
         remotes = [line.strip() for line in remotes_str.splitlines() if line.strip()]
 
     gh = check_gh()
+    try:
+        cfg_cached = load_sync_config()
+    except Exception:
+        cfg_cached = {}
     return {
         "vault_dir": str(v_dir),
         "is_git_repo": is_repo,
@@ -542,6 +787,10 @@ def sync_status() -> dict[str, Any]:
         "last_sync_epoch": cfg.get("last_sync_epoch", 0),
         "last_sync_status": cfg.get("last_sync_status", "unconfigured"),
         "last_dedupe_epoch": cfg.get("last_dedupe_epoch", 0),
+        "behind": int(cfg_cached.get("behind", 0) or 0),
+        "ahead": int(cfg_cached.get("ahead", 0) or 0),
+        "last_check_epoch": int(cfg_cached.get("last_check_epoch", 0) or 0),
+        "last_check_state": str(cfg_cached.get("last_check_state", "unknown")),
         "gh_available": gh["installed"],
         "gh_authenticated": gh["authenticated"],
         "gh_username": gh["username"],
@@ -566,6 +815,8 @@ def main():
     init_p.add_argument("remote_url", nargs="?", default=None, help="Remote Git repository URL")
     init_p.add_argument("--create-private", action="store_true", help="Auto-create private repo with gh")
     init_p.add_argument("--repo-name", default="agent-memory-vault", help="Repo name for --create-private")
+    check_p = sub.add_parser("check", help="One-shot freshness check + conditional sync (detached workers)")
+    check_p.add_argument("--vault-dir", default=None, help="Vault directory override")
 
     args = parser.parse_args()
 
@@ -577,6 +828,15 @@ def main():
         print(f"  Remote URL:   {st['remote_url'] or '(none)'}")
         print(f"  Auto-sync:    {'Enabled' if st['auto_sync'] else 'Disabled'}")
         print(f"  Sync Status:  {st['last_sync_status']}")
+        if st.get("remote_url"):
+            _b, _a = int(st.get("behind", 0) or 0), int(st.get("ahead", 0) or 0)
+            _cs = st.get("last_check_state", "unknown")
+            if _cs == "unknown":
+                print("  Freshness:    not checked yet (checked on session start)")
+            elif _b == 0 and _a == 0:
+                print("  Freshness:    in sync with remote")
+            else:
+                print(f"  Freshness:    {_a} ahead / {_b} behind remote")
         if st["last_sync_epoch"]:
             t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["last_sync_epoch"]))
             print(f"  Last Synced:  {t_str}")
@@ -605,6 +865,10 @@ def main():
         else:
             ok, msg = init_git_repo()
             print(msg)
+    elif args.subcommand == "check":
+        fresh = run_check_once(vault_dir=getattr(args, "vault_dir", None))
+        print(f"Freshness: {fresh['state']} "
+              f"({fresh['ahead']} ahead / {fresh['behind']} behind)")
 
 
 if __name__ == "__main__":
