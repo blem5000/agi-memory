@@ -50,6 +50,10 @@ curl -fsSL https://raw.githubusercontent.com/kdbhalala/agi-memory/main/install.s
 # Or: Homebrew / PyPI
 brew tap kdbhalala/agi-memory https://github.com/kdbhalala/agi-memory && brew install agi-memory
 pipx install agi-memory
+
+# With optional hybrid semantic recall (Potion vectors, CPU-only, offline):
+pipx install "agi-memory[semantic]"
+# Details: [Hybrid Semantic Recall](docs/semantic.md).
 ```
 
 Then wire up your assistants and initialize a project:
@@ -65,6 +69,70 @@ assistant's own format. Run `/agi-init` inside your assistant and it reads the
 codebase and writes the project's `rules/` and `context/` files.
 
 Full options, including uvx and from-source: [Installation](docs/installation.md).
+
+### Manual setup: OpenCode, Cline, Command Code
+
+`agi-integrate install all` wires every detected assistant automatically
+(including OpenCode and Cline). To configure one tool by hand, point it at the
+`agi-memory` server (stdio, no arguments — make sure it is on your `PATH`)
+and add the memory-discipline rules block from [INTEGRATIONS.md](INTEGRATIONS.md).
+
+**OpenCode** — `~/.config/opencode/opencode.jsonc` (user) or `./opencode.jsonc` (project):
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-memory": {
+      "type": "local",
+      "command": ["agi-memory"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Rules: append the discipline block to `~/.config/opencode/rules.md` (user)
+or `AGENTS.md` (project).
+
+**Cline (VS Code)** — use the MCP panel, or edit the settings file directly:
+
+- Windows: `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+- macOS: `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+- Linux: `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+
+```json
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "agi-memory",
+      "args": [],
+      "disabled": false
+    }
+  }
+}
+```
+
+Rules: project file `.clinerules/agent-memory.md` with the discipline block.
+
+**Command Code** — one command (user scope, all projects):
+
+```bash
+commandcode mcp add --transport stdio agent-memory --scope user -- agi-memory
+# alternative JSON form:
+# commandcode mcp add-json agent-memory '{"command":"agi-memory","args":[]}' --scope user
+```
+
+Project scope instead: `--scope project` (writes a committable `.mcp.json`).
+Shortcut: if OpenCode is already wired, run `/import opencode` inside a
+Command Code session. Rules: same discipline block in the project's `AGENTS.md`.
+
+Verify any of them with:
+
+```bash
+agi-integrate status   # who is detected / configured
+agi-integrate test     # MCP handshake + registered tools
+```
 
 ---
 
