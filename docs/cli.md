@@ -67,10 +67,10 @@ and the `session-end` hook forces one. See [Vault & Git Sync](sync.md).
 ### Curating Knowledge (L1 -> L2 Knowledge Graph)
 ```bash
 # Preview durable candidates (zero tokens)
-python3 -m agi_memory.promote --dry-run --project my-app
+agi-memory promote --dry-run --project my-app
 
 # Ingest high-signal learnings into the native knowledge graph
-python3 -m agi_memory.promote --project my-app --limit 20
+agi-memory promote --project my-app --limit 20
 ```
 
 ---

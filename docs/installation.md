@@ -62,28 +62,28 @@ follow releases. Prefer those if you want to move only when a version ships.
 ```bash
 git clone https://github.com/kdbhalala/agi-memory.git
 cd agi-memory
-python3 -m agi_memory.integrate install all
+PYTHONPATH=src python3 -m agi_memory.integrate install all
 ```
 
 ### 1. Check Tool Status
 Inspect which AI coding assistants are detected on your machine:
 ```bash
 agi-integrate status
-# or: python3 -m agi_memory.integrate status
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate status
 ```
 
 ### 2. Verify MCP Handshake
 Validate the stdio protocol and tool registrations:
 ```bash
 agi-integrate test
-# or: python3 -m agi_memory.integrate test
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate test
 ```
 
 ### 3. Scaffold Any Project Repository
 Equip any existing or new codebase with universal multi-assistant rules, modular context, and `.mcp.json`:
 ```bash
 agi-integrate init /path/to/my-repo --name my-repo
-# or: python3 -m agi_memory.integrate init /path/to/my-repo --name my-repo
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate init /path/to/my-repo --name my-repo
 ```
 
 ### 4. Automated Lifecycle Hooks

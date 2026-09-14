@@ -1046,6 +1046,12 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "alias":
             cmd_alias(argv[1:])
             return
+        elif cmd == "promote":
+            # Promotion had no CLI entry point: the documented
+            # `python3 -m agi_memory.promote` fails from a source checkout, which
+            # is how install.sh runs, so terminal users could not promote at all.
+            promote.main(argv[1:])
+            return
         elif cmd == "recall":
             cmd_recall(argv[1:])
             return
@@ -1098,6 +1104,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory unpin <key>               Unpin block from core memory")
             print("  agi-memory blocks                    List pinned core memory blocks")
             print("  agi-memory alias list|add|rm         Curate the synonym/acronym table")
+            print("  agi-memory promote [--dry-run]       Promote durable learnings into the knowledge graph")
             print("  agi-memory init [PATH]               Wire a project & install the /agi-init slash command")
             print("  agi-memory analyze [PATH] [--json]   Report detected stack, commands, layout")
             print("  agi-memory integrate [COMMAND ...]   Assistant integration & project wiring")

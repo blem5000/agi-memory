@@ -24,7 +24,7 @@ When switching from Laptop to Desktop:
 ```bash
 # Pull remote memories and reconcile local SQLite cache
 agi-sync now
-# or: python3 -m agi_memory.sync now
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.sync now
 ```
 Auto-sync already does this: every `record` and `add_edge` schedules a
 3s-debounced background sync, and the `session-end` hook forces one. Run it by
@@ -35,17 +35,17 @@ If large volumes of memories have been recorded:
 ```bash
 # Deduplicate observations and graph edges, then re-index SQLite
 agi-sync dedupe
-# or: python3 -m agi_memory.sync dedupe
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.sync dedupe
 ```
 
 ### 3. Promoting Working Memory to Knowledge Graph
 Curate high-signal items from L1 observations into L2 triples:
 ```bash
 # Dry run to inspect candidates
-python3 -m agi_memory.promote --dry-run --project agi-memory
+agi-memory promote --dry-run --project agi-memory
 
 # Ingest top 20 durable learnings
-python3 -m agi_memory.promote --project agi-memory --limit 20
+agi-memory promote --project agi-memory --limit 20
 ```
 
 ### 4. Wire or Refresh Coding Assistants
@@ -53,7 +53,7 @@ Inspect or install MCP connections across tools:
 ```bash
 # Check all detected tools
 agi-integrate status
-# or: python3 -m agi_memory.integrate status
+# from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate status
 
 # Reconfigure all installed tools
 agi-integrate install all
@@ -72,7 +72,7 @@ By default, active rules are ranked ahead of superseded rules:
 ```bash
 # Active search
 agi-recall "storage" --project agi-memory
-# or: python3 -m agi_memory.recall "storage" --project agi-memory
+# or: agi-memory recall "storage" --project agi-memory   (module form warns: the package imports recall first)
 
 # Deep search including L2 knowledge graph
 agi-recall "storage" --project agi-memory --deep
