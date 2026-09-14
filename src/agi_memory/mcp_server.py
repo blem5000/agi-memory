@@ -20,8 +20,10 @@ try:
     from agi_memory.layers.session_layer import SessionLayer
     from agi_memory.layers.episodic_layer import EpisodicLayer
     from agi_memory.layers.code_layer import CodeLayer
+    from agi_memory.layers.graph_layer import GraphLayer
     from agi_memory.recall import recall
-    from agi_memory import sync, vault
+    from agi_memory import bootstrap, promote, sync, vault
+    from agi_memory.vault import append_tombstone_to_vault
     from agi_memory import __version__
 except ImportError:
     sys.path.insert(0, __file__.rsplit("/", 1)[0])
@@ -29,9 +31,13 @@ except ImportError:
     from layers.session_layer import SessionLayer
     from layers.episodic_layer import EpisodicLayer
     from layers.code_layer import CodeLayer
+    from layers.graph_layer import GraphLayer
     from recall import recall
+    import bootstrap
+    import promote
     import sync
     import vault
+    from vault import append_tombstone_to_vault
     __version__ = "0.5.0"
 
 TOOLS = [
@@ -245,16 +251,16 @@ def call_tool(name, args):
         """Resolve a term through the L2 alias table. Injected into L1 so the
         layers stay decoupled; failures degrade to returning the term as-is.
 
-        The import is local because GraphLayer is imported lazily further down
-        this function -- referencing the module-level name here silently raised
-        NameError into the except clause and disabled canonicalization entirely.
+        This once needed a local import: GraphLayer was imported lazily further
+        down, which shadowed the module-level name and made the reference here
+        raise NameError into the except clause, silently disabling
+        canonicalization. Every lazy import in this module is now hoisted to the
+        top, so there is nothing left to shadow it -- but the failure was
+        invisible to every unit test, so the end-to-end subprocess check that
+        caught it stays.
         """
         try:
-            try:
-                from agi_memory.layers.graph_layer import GraphLayer as _GL
-            except ImportError:
-                from layers.graph_layer import GraphLayer as _GL
-            return _GL().resolve_node(term)
+            return GraphLayer().resolve_node(term)
         except Exception:
             return term
 
@@ -275,10 +281,6 @@ def call_tool(name, args):
         if not query:
             return "(empty query)"
         try:
-            try:
-                from agi_memory.layers.graph_layer import GraphLayer
-            except ImportError:
-                from layers.graph_layer import GraphLayer
             l2: MemoryLayer | None = GraphLayer(project=project)
         except Exception:
             l2 = None
@@ -348,10 +350,6 @@ def call_tool(name, args):
         added_edges = 0
         if relations and isinstance(relations, list):
             try:
-                try:
-                    from agi_memory.layers.graph_layer import GraphLayer
-                except ImportError:
-                    from layers.graph_layer import GraphLayer
                 l2 = GraphLayer(project=project)
                 for item in relations:
                     if isinstance(item, dict) and "source" in item and "relation" in item and "target" in item:
@@ -378,22 +376,11 @@ def call_tool(name, args):
 
         return msg
     if name == "memory_promote":
-        try:
-            from agi_memory.layers.graph_layer import GraphLayer
-            from agi_memory import promote
-        except ImportError:
-            from layers.graph_layer import GraphLayer
-            import promote
         batch_limit = int(args.get("limit", 20) or 20)
         l2 = GraphLayer(project=project)
         fresh = promote.promote(l2, project=project, limit=batch_limit)
         return f"promoted {len(fresh)} items to knowledge graph"
     if name == "memory_sync":
-        try:
-            from agi_memory import sync, vault
-        except ImportError:
-            import sync
-            import vault
         action = str(args.get("action", "sync")).lower()
         if action == "status":
             st = sync.sync_status()
@@ -409,10 +396,6 @@ def call_tool(name, args):
             r = sync.sync(push=True, pull=True)
             return f"Sync complete. Status: {r['status']}. Committed: {r['committed']}, Pulled: {r['pulled']}, Pushed: {r['pushed']}."
     if name == "memory_bootstrap":
-        try:
-            from agi_memory import bootstrap
-        except ImportError:
-            import bootstrap
         repo = str(args.get("repo", ".") or ".")
         max_commits = int(args.get("max_commits", 20) or 20)
         proj = args.get("project")
@@ -429,10 +412,6 @@ def call_tool(name, args):
         detail = f" ({', '.join(parts)})" if parts else ""
         return f"Bootstrapped {cnt} memories for project '{p}'{detail}."
     if name == "memory_timeline":
-        try:
-            from agi_memory.layers.episodic_layer import EpisodicLayer
-        except ImportError:
-            from layers.episodic_layer import EpisodicLayer
         ep = EpisodicLayer(project=project)
         sid = args.get("session_id")
         if sid:
@@ -448,10 +427,6 @@ def call_tool(name, args):
         sessions = ep.get_timeline(project=project, limit=limit)
         return EpisodicLayer.format_timeline(sessions)
     if name == "memory_session_outcome":
-        try:
-            from agi_memory.layers.episodic_layer import EpisodicLayer
-        except ImportError:
-            from layers.episodic_layer import EpisodicLayer
         ep = EpisodicLayer(project=project)
         try:
             marked = ep.set_outcome(args.get("outcome", ""), session_id=args.get("session_id"),
@@ -462,19 +437,11 @@ def call_tool(name, args):
             return "No session found to mark."
         return f"Session '{marked}' recorded as {args.get('outcome')}."
     if name == "code_structure":
-        try:
-            from agi_memory.layers.code_layer import CodeLayer
-        except ImportError:
-            from layers.code_layer import CodeLayer
         cl = CodeLayer(project=project)
         target_path = args.get("path", ".") or "."
         syms = cl.get_structure(target_path=target_path, project=project)
         return CodeLayer.format_structure(syms)
     if name == "code_callers":
-        try:
-            from agi_memory.layers.code_layer import CodeLayer
-        except ImportError:
-            from layers.code_layer import CodeLayer
         cl = CodeLayer(project=project)
         sym = str(args.get("symbol", "")).strip()
         if not sym:
@@ -483,10 +450,6 @@ def call_tool(name, args):
         callers = cl.get_callers(sym, project=project, max_depth=depth)
         return CodeLayer.format_callers(callers, sym)
     if name == "code_dependencies":
-        try:
-            from agi_memory.layers.code_layer import CodeLayer
-        except ImportError:
-            from layers.code_layer import CodeLayer
         cl = CodeLayer(project=project)
         sym = str(args.get("symbol", "")).strip()
         if not sym:
@@ -495,10 +458,6 @@ def call_tool(name, args):
         deps = cl.get_dependencies(sym, project=project, max_depth=depth)
         return CodeLayer.format_dependencies(deps, sym)
     if name == "code_impact":
-        try:
-            from agi_memory.layers.code_layer import CodeLayer
-        except ImportError:
-            from layers.code_layer import CodeLayer
         cl = CodeLayer(project=project)
         target = str(args.get("target", "")).strip()
         if not target:
@@ -507,10 +466,6 @@ def call_tool(name, args):
         impact = cl.get_impact(target, project=project, max_depth=depth)
         return CodeLayer.format_impact(impact)
     if name == "code_index":
-        try:
-            from agi_memory.layers.code_layer import CodeLayer
-        except ImportError:
-            from layers.code_layer import CodeLayer
         cl = CodeLayer(project=project)
         p = str(args.get("path", ".") or ".")
         force = bool(args.get("force", False))
@@ -551,10 +506,6 @@ def run_mcp_server():
                 # Trigger initial background pull to sync multi-device memories
                 try:
                     import threading
-                    try:
-                        from agi_memory import sync
-                    except ImportError:
-                        import sync
                     t = threading.Thread(target=sync.sync, kwargs={"push": False, "pull": True}, daemon=True)
                     t.start()
                 except Exception:
@@ -681,21 +632,13 @@ def cmd_delete(argv: list[str]) -> None:
 
     purged = 0
     try:
-        try:
-            from agi_memory.layers.graph_layer import GraphLayer as _GL
-        except ImportError:
-            from layers.graph_layer import GraphLayer as _GL
-        purged = _GL().delete_by_source(f"obs:{obs_id}")
+        purged = GraphLayer().delete_by_source(f"obs:{obs_id}")
     except Exception as e:
         print(f"[!] Could not purge promoted facts: {e}")
 
     tombstoned = False
     if guid:
         try:
-            try:
-                from agi_memory.vault import append_tombstone_to_vault
-            except ImportError:
-                from vault import append_tombstone_to_vault
             tombstoned = append_tombstone_to_vault(guid)
         except Exception as e:
             print(f"[!] Could not write vault tombstone: {e}")
@@ -872,10 +815,6 @@ def main(argv: list[str] | None = None) -> None:
             return
         elif cmd == "sync":
             if len(argv) > 1 and argv[1] in ("now", "dedupe", "init", "status"):
-                try:
-                    from agi_memory import sync
-                except ImportError:
-                    import sync
                 sys.argv = [sys.argv[0]] + argv[1:]
                 sync.main()
                 return
@@ -895,10 +834,6 @@ def main(argv: list[str] | None = None) -> None:
             analyze.main(argv[1:])
             return
         elif cmd == "bootstrap":
-            try:
-                from agi_memory import bootstrap
-            except ImportError:
-                import bootstrap
             bootstrap.main(argv[1:])
             return
         elif cmd == "log":
