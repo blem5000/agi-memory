@@ -26,7 +26,6 @@ DEFAULT_DB = Path(os.environ.get("AGI_MEMORY_DB") or os.environ.get("AGENT_MEMOR
 SESSION_DB = DEFAULT_DB
 GRAPH_DB = Path(os.environ.get("AGI_MEMORY_GRAPH_DB") or os.environ.get("AGENT_MEMORY_GRAPH_DB", DEFAULT_DB))
 LEGACY_CLAUDE_MEM_DB = Path(os.environ.get("CLAUDE_MEM_DB", Path.home() / ".claude-mem" / "claude-mem.db"))
-CLAUDE_MEM_DB = LEGACY_CLAUDE_MEM_DB
 SYNC_CONFIG_FILE = DATA_DIR / "sync.json"
 DEFAULT_STATE_FILE = Path(os.environ.get("AGI_MEMORY_STATE") or os.environ.get("AGENT_MEMORY_STATE", DATA_DIR / "promoted.json"))
 

@@ -39,8 +39,6 @@ def recall(query: str, l1: MemoryLayer, l2: MemoryLayer | None = None,
     return result
 
 
-recall.recall = recall  # Allow both module-style and function-style calls
-
 
 def main(argv: list[str] | None = None) -> None:
     import argparse

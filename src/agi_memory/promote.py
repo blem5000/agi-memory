@@ -10,8 +10,10 @@ from pathlib import Path
 
 try:
     from agi_memory.config import get_default_db, get_state_path
+    from agi_memory.layers.base import open_db
 except ImportError:
     from config import get_default_db, get_state_path
+    from layers.base import open_db
 
 DB = get_default_db()
 STATE = get_state_path()
@@ -42,7 +44,7 @@ def collect(project: str | None = None, since_epoch: int = 0) -> list:
     observations and None for session learnings, which have no row."""
     if not DB.exists():
         return []
-    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    con = open_db(DB, readonly=True)
     out: list[str] = []
     try:
         q = "SELECT project, learned, completed FROM session_summaries WHERE created_at_epoch > ?"

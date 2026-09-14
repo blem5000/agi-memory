@@ -77,11 +77,6 @@ def save_sync_config(cfg: dict[str, Any]) -> None:
     tmp.replace(SYNC_CONFIG_FILE)
 
 
-def check_git() -> bool:
-    """Check if git CLI is available."""
-    return shutil.which("git") is not None
-
-
 def check_gh() -> dict[str, Any]:
     """Check if GitHub CLI (gh) is installed and authenticated."""
     gh_bin = shutil.which("gh")
@@ -433,12 +428,6 @@ def enable_sync_listeners() -> None:
     """Enable debounced auto-sync triggers on record and edge events."""
     add_record_listener(_sync_on_record)
     add_edge_listener(_sync_on_edge)
-
-
-def disable_sync_listeners() -> None:
-    """Disable debounced auto-sync triggers."""
-    remove_record_listener(_sync_on_record)
-    remove_edge_listener(_sync_on_edge)
 
 
 # Automatically register sync listeners on module import

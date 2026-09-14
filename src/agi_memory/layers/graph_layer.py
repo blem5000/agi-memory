@@ -13,19 +13,18 @@ import os
 import re
 import sqlite3
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .base import Hit, MemoryLayer, open_db, stem_terms
 
 try:
-    from agi_memory.config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+    from agi_memory.config import DEFAULT_DB, get_default_db
 except ImportError:
     try:
-        from ..config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+        from ..config import DEFAULT_DB, get_default_db
     except (ImportError, ValueError):
-        from config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+        from config import DEFAULT_DB, get_default_db
 
 get_db_path = get_default_db
 
@@ -449,14 +448,7 @@ class GraphLayer(MemoryLayer):
         else:
             content = text
 
-        # 1. Try LLM extraction if an API key is available
-        extracted = self._extract_with_llm(content, proj)
-        if extracted:
-            for s, r, t, f in extracted:
-                self.add_edge(s, r, t, f, project=proj, source_ref=source_ref)
-            return
-
-        # 2. Rule-based heuristic extraction (zero-token offline fallback)
+        # Rule-based heuristic extraction: offline, zero tokens, no network.
         triples = self._extract_heuristic(content, proj)
         for s, r, t, f in triples:
             self.add_edge(s, r, t, f, project=proj, source_ref=source_ref)
@@ -523,53 +515,6 @@ class GraphLayer(MemoryLayer):
 
         return results
 
-    def _extract_with_llm(self, text: str, project: str) -> Optional[List[Tuple[str, str, str, str]]]:
-        """Optional LLM semantic triple extractor via stdlib urllib (zero packages)."""
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY")
-        endpoint = os.getenv("LLM_ENDPOINT", "https://api.openai.com/v1/chat/completions")
-        model = os.getenv("LLM_MODEL", "gpt-4o-mini" if "api.openai.com" in endpoint else "openrouter/auto")
-
-        if not api_key:
-            return None
-
-        prompt = (
-            "Extract semantic knowledge graph triples from this technical note.\n"
-            "Output ONLY a valid JSON array of objects with keys: source, relation, target, fact.\n"
-            "Example: [{\"source\":\"AuthService\",\"relation\":\"USES\",\"target\":\"JWT\",\"fact\":\"AuthService uses JWT\"}]\n\n"
-            f"Text: {text}"
-        )
-
-        try:
-            req_data = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
-            }
-            req = urllib.request.Request(
-                endpoint,
-                data=json.dumps(req_data).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.load(resp)
-                raw_out = data["choices"][0]["message"]["content"].strip()
-                # Clean code blocks
-                raw_out = re.sub(r"^```(?:json)?|```$", "", raw_out, flags=re.MULTILINE).strip()
-                parsed = json.loads(raw_out)
-                results = []
-                for item in parsed:
-                    s = item.get("source", "").strip()
-                    r = item.get("relation", "").strip().upper()
-                    t = item.get("target", "").strip()
-                    f = item.get("fact", "").strip()
-                    if s and r and t and f:
-                        results.append((s, r, t, f))
-                return results if results else None
-        except Exception:
-            return None
 
     def search(self, query: str, limit: int = 5, include_inactive: bool = False) -> List[Hit]:
         """Search graph, degrading to no hits if the DB is unreadable."""

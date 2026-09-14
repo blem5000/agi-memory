@@ -16,12 +16,12 @@ from typing import Callable, Optional
 from .base import Hit, MemoryLayer, open_db
 
 try:
-    from agi_memory.config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+    from agi_memory.config import DEFAULT_DB, get_default_db
 except ImportError:
     try:
-        from ..config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+        from ..config import DEFAULT_DB, get_default_db
     except (ImportError, ValueError):
-        from config import CLAUDE_MEM_DB, DEFAULT_DB, get_default_db
+        from config import DEFAULT_DB, get_default_db
 
 DB = get_default_db()
 

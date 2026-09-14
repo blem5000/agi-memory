@@ -23,12 +23,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     from agi_memory.config import (
-        CLAUDE_MEM_DB,
         DATA_DIR,
         DEFAULT_DB,
         DEFAULT_STATE_FILE,
         GRAPH_DB,
-        LEGACY_CLAUDE_MEM_DB,
         SESSION_DB,
         SYNC_CONFIG_FILE,
         VAULT_DIR,
@@ -42,12 +40,10 @@ try:
     from agi_memory.layers.graph_layer import GraphLayer, add_edge_listener, remove_edge_listener
 except ImportError:
     from config import (
-        CLAUDE_MEM_DB,
         DATA_DIR,
         DEFAULT_DB,
         DEFAULT_STATE_FILE,
         GRAPH_DB,
-        LEGACY_CLAUDE_MEM_DB,
         SESSION_DB,
         SYNC_CONFIG_FILE,
         VAULT_DIR,
@@ -110,83 +106,6 @@ def init_vault(vault_dir: Path | str | None = None) -> Path:
     return v_dir
 
 
-def bootstrap_from_existing_claudemem(
-    vault_dir: Path | str | None = None,
-    session_db: Path | str | None = None
-) -> int:
-    """Migrate observations from legacy claude-mem.db if present and not yet imported."""
-    if not LEGACY_CLAUDE_MEM_DB.exists():
-        return 0
-
-    v_dir = init_vault(vault_dir)
-    s_db = Path(session_db) if session_db else SESSION_DB
-    s_db.parent.mkdir(parents=True, exist_ok=True)
-
-    con_target = open_db(s_db)
-    con_target.execute("""
-        CREATE TABLE IF NOT EXISTS observations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, memory_session_id TEXT, project TEXT,
-            type TEXT, title TEXT, subtitle TEXT, facts TEXT, narrative TEXT,
-            concepts TEXT, files_read TEXT, files_modified TEXT, prompt_number INT,
-            discovery_tokens INT, created_at TEXT, created_at_epoch INT, content_hash TEXT,
-            generated_by_model TEXT, relevance_count INT, sync_rev TEXT
-        )
-    """)
-    cur_dst = con_target.execute("PRAGMA table_info(observations)")
-    dst_cols = [r[1] for r in cur_dst.fetchall()]
-
-    con_src = open_db(LEGACY_CLAUDE_MEM_DB, readonly=True)
-    con_src.row_factory = sqlite3.Row
-    try:
-        rows = con_src.execute("SELECT * FROM observations").fetchall()
-    except Exception:
-        con_src.close()
-        con_target.close()
-        return 0
-
-    if not rows:
-        con_src.close()
-        con_target.close()
-        return 0
-
-    cols_str = ", ".join(dst_cols)
-    ph = ", ".join("?" for _ in dst_cols)
-
-    batch = []
-    for r in rows:
-        row_dict = dict(r)
-        if not row_dict.get("narrative") and row_dict.get("text"):
-            row_dict["narrative"] = row_dict["text"]
-        vals = [row_dict.get(c) for c in dst_cols]
-        batch.append(vals)
-
-    con_target.executemany(f"INSERT OR IGNORE INTO observations ({cols_str}) VALUES ({ph})", batch)
-
-    con_target.execute("""
-        CREATE TABLE IF NOT EXISTS session_summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, memory_session_id TEXT, project TEXT,
-            learned TEXT, completed TEXT, next_steps TEXT, created_at TEXT, created_at_epoch INT
-        )
-    """)
-    try:
-        s_rows = con_src.execute("SELECT * FROM session_summaries").fetchall()
-        s_cols = ["id", "memory_session_id", "project", "learned", "completed", "next_steps", "created_at", "created_at_epoch"]
-        s_batch = []
-        for sr in s_rows:
-            sd = dict(sr)
-            s_batch.append([sd.get(c) for c in s_cols])
-        s_cols_str = ", ".join(s_cols)
-        s_ph = ", ".join("?" for _ in s_cols)
-        con_target.executemany(f"INSERT OR IGNORE INTO session_summaries ({s_cols_str}) VALUES ({s_ph})", s_batch)
-    except Exception:
-        pass
-
-    con_target.commit()
-    con_src.close()
-    con_target.close()
-
-    export_dirty_to_vault(vault_dir=v_dir, session_db=s_db)
-    return len(batch)
 
 
 def append_observation_to_vault(obs_dict: dict, vault_dir: Path | str | None = None) -> bool:
@@ -295,16 +214,17 @@ def _vault_on_edge(edge_dict: dict) -> None:
         pass
 
 
+def disable_vault_listeners() -> None:
+    """Disable vault mirroring. Used by tests that assert on the SQLite side
+    alone, so the append-only vault is not written as a side effect."""
+    remove_record_listener(_vault_on_record)
+    remove_edge_listener(_vault_on_edge)
+
+
 def enable_vault_listeners() -> None:
     """Enable automatic appending of records and edges to vault."""
     add_record_listener(_vault_on_record)
     add_edge_listener(_vault_on_edge)
-
-
-def disable_vault_listeners() -> None:
-    """Disable automatic appending of records and edges to vault."""
-    remove_record_listener(_vault_on_record)
-    remove_edge_listener(_vault_on_edge)
 
 
 # Automatically register vault listeners on module import

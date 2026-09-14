@@ -775,7 +775,7 @@ with tempfile.TemporaryDirectory() as core_tmp:
 
         # 8e. recall.py integration
         sl_core.record("Observation about database caching", title="DB Caching", project="p-core")
-        r = recall.recall("caching", sl_core)
+        r = recall("caching", sl_core)
         assert "core" in r
         assert any(b["key"] == "INVARIANT_1" for b in r["core"])
 
