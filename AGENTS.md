@@ -11,7 +11,7 @@ When operating in this codebase:
 3. Call `memory_timeline(project="agi-memory")` to check what was accomplished in prior sessions and review touched files.
 4. Call `code_callers(symbol)` and `code_impact(target)` before refactoring or deleting symbols to inspect blast radius.
 5. Call `code_structure(path)` to inspect class and function hierarchies in modules.
-6. Call `memory_record(text, title, project="agi-memory", category="...", supersedes="...", relations=[...])` when establishing conventions or resolving non-trivial issues.
+6. Call `memory_record(text, title, project="agi-memory", category="...", supersedes="...", rationale="...", origin="...", relations=[...])` when establishing conventions or resolving non-trivial issues. Pass `rationale` -- a conclusion without its reasoning cannot be re-examined when the constraints change. Pass `origin="user-confirmed"` only when the user actually said or approved it; anything you concluded yourself is `agent-inferred`, however confident.
 7. Pin non-negotiable invariants using `memory_pin(key, content, category="architecture", project="agi-memory")`.
 8. Call `memory_session_outcome(outcome="abandoned"|"blocked"|"superseded"|"completed")` when work is dropped, blocked, replaced, or genuinely finished. Unmarked sessions stay `unknown` and are recapped with a do-not-resume warning.
 9. Call `memory_bootstrap(repo=".")` when operating in a newly attached workspace to seed cold-start architectural memory and code graph.
@@ -20,7 +20,7 @@ When operating in this codebase:
 
 - `src/agi_memory/`: Standard Python package root containing all core modules:
   - `config.py`: Single Source of Truth (SSoT) for paths, directories, and environment variable resolution.
-  - `layers/session_layer.py`: L1 Epistemic Working Memory (SQLite FTS5 with BM25 ranking, <2ms), Core Memory blocks, and inspection/deletion APIs.
+  - `layers/session_layer.py`: L1 Epistemic Working Memory (SQLite FTS5 + Porter stemming, BM25 ranking, <2ms), Core Memory blocks, rationale/supersession/origin on each observation, and inspection/deletion APIs.
   - `layers/graph_layer.py`: L2 Semantic Knowledge Graph (SQLite recursive CTEs, <0.5ms), Bi-Temporal Edges & Entity Aliases.
   - `layers/episodic_layer.py`: L3 Episodic Session History (session timelines, touched files, commit deltas, cross-session recaps).
   - `layers/code_layer.py`: L4 Structural Code Graph (Python stdlib AST & regex parser, callers, dependencies, blast-radius impact analysis).

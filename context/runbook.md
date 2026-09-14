@@ -2,13 +2,33 @@
 
 ## Daily Operations
 
+### 0. First-Time Remote Setup
+The vault commits locally from the first write, but nothing leaves the machine
+until a remote exists — `agi-memory sync status` reports `no_remote` until then.
+```bash
+# Create a private GitHub repo via the gh CLI and push the vault to it
+agi-memory sync init --create-private [--repo-name agent-memory-vault]
+
+# Or point at a remote you already have
+agi-memory sync init https://github.com/<you>/<repo>.git
+
+# Confirm
+agi-memory sync status
+```
+Before the first push on a long-lived vault, run `git -C ~/.agent-memory/vault
+gc`. Each sync commits a fresh copy of `observations.jsonl`, so the loose
+objects accumulate badly — one real vault packed from 746 MB to 25 MB.
+
 ### 1. Synchronizing Across Machines
 When switching from Laptop to Desktop:
 ```bash
 # Pull remote memories and reconcile local SQLite cache
-agi-sync sync
-# or: python3 -m agi_memory.sync sync
+agi-sync now
+# or: python3 -m agi_memory.sync now
 ```
+Auto-sync already does this: every `record` and `add_edge` schedules a
+3s-debounced background sync, and the `session-end` hook forces one. Run it by
+hand when you want the push to have happened *before* you walk away.
 
 ### 2. Manual Compaction & Deduplication
 If large volumes of memories have been recorded:
@@ -81,10 +101,29 @@ agi-integrate hooks all --scope project
 ### 9. Core Memory Pinning & Invariants
 Pin critical rules so they are unconditionally injected on session startup and recall:
 ```bash
-# Pin via Python CLI
-python3 -c "from agi_memory.layers.session_layer import SessionLayer; SessionLayer(project='agi-memory').pin_block('zero_pip_deps', 'Zero external pip dependencies: strictly Python stdlib and sqlite3', category='architecture', project='agi-memory')"
+agi-memory pin zero_pip_deps "Zero external pip dependencies: strictly Python stdlib and sqlite3" \
+  --category architecture --project agi-memory
+agi-memory blocks
+agi-memory unpin zero_pip_deps
 
 # Or via MCP tools: memory_pin / memory_unpin / memory_blocks
+```
+
+### 9b. Curating the Entity Alias Table
+Aliases resolve a term to its canonical form at write and query time, so `k8s`
+and `Kubernetes` reach the same memories. The table ships with 14 seed entries
+and learns nothing on its own — what is not in it does not resolve.
+```bash
+agi-memory alias list
+agi-memory alias add k8s Kubernetes --category infra
+agi-memory alias rm k8s      # a wrong entry rewrites every term it matches
+```
+
+### 9c. Marking How a Session Ended
+An unmarked session is recorded as `unknown` and the next session is told not to
+resume it. Marking it is what turns that noise into a signal.
+```bash
+agi-memory outcome completed    # or abandoned | blocked | superseded
 ```
 
 ### 10. Cold-Start Seeding on New Repositories

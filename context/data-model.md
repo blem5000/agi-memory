@@ -23,15 +23,28 @@ Stores granular session observations, tool executions, and precedents.
 - `generated_by_model`: TEXT
 - `relevance_count`: INTEGER
 - `sync_rev`: TEXT
+- `rationale`: TEXT (why the decision was made; also appended to `facts` so FTS reaches it, and rendered as `Why: ...` in recall)
+- `superseded_by`: INTEGER (id of the record that replaced this one; `type` flipping to `superseded` says a memory is dead, this says what replaced it)
+- `supersedes_refs`: TEXT (JSON array of the `content_hash` values this record superseded. Row ids are local, so the hashes are what let another machine rebuild the chain on import)
+- `origin`: TEXT (`user-confirmed`, `agent-inferred` (default), or `bootstrapped`. Set at write time; an unrecognised value falls back to `agent-inferred` rather than becoming a trust claim)
+
+All five of the columns above were added after the first release and are
+migrated in place by `_migrate_columns_if_needed`, since `_init_db` only builds
+the schema for a brand-new database.
 
 **FTS5 Index (`observations_fts`)**:
-Full-text index on `title`, `subtitle`, `facts`, `narrative`, `concepts` with SQLite `bm25()` ranking. Synchronized via `AFTER INSERT` (`observations_ai`), `AFTER DELETE` (`observations_ad`), and `AFTER UPDATE` (`observations_au`) triggers. When superseded, records are downranked in search queries behind active records.
+Full-text index on `title`, `subtitle`, `facts`, `narrative`, `concepts` with SQLite `bm25()` ranking and the `porter unicode61` tokenizer (falling back to `unicode61` on SQLite builds without Porter). `FTS_SCHEMA_VERSION` tracks the tokenizer: bumping it rebuilds an existing index instead of silently serving matches from the old rules. Synchronized via `AFTER INSERT` (`observations_ai`), `AFTER DELETE` (`observations_ad`), and `AFTER UPDATE` (`observations_au`) triggers. When superseded, records are downranked in search queries behind active records.
 
 **Data Access APIs (`SessionLayer`)**:
-- `record(text, title, project, category, supersedes, relations)`: In-flight insertion with conflict detection.
+- `record(text, title, project, category, supersedes, rationale, origin)`: In-flight insertion with conflict detection.
 - `get_observation(obs_id)`: Fetches a single observation by ID with parsed facts and narrative.
 - `delete_observation(obs_id, hard=False)`: Soft-delete (marks superseded) or hard-delete from SQLite and FTS5.
 - `list_observations(limit=20, project=None, include_superseded=False)`: Queries recent observations ordered by ID descending.
+
+**Ranking order** (`_via_sqlite`): active records before superseded ones, then
+BM25 `rank`, then `origin` (`user-confirmed` < `agent-inferred` <
+`bootstrapped`). Origin is the last key deliberately — it separates records the
+scorer could not, and never reorders on authority over relevance.
 
 ### `graph_nodes` Table (L2 Knowledge Graph)
 Stores entities and concepts.
@@ -64,6 +77,12 @@ Maps synonyms, acronyms, and aliases to canonical entity names.
 - `category`: TEXT (e.g. `"concept"`, `"technology"`, `"api"`)
 - `created_at`: TEXT DEFAULT CURRENT_TIMESTAMP
 
+The table is **curated, not learned**. It seeds 14 entries on first use and
+gains nothing on its own — measured at 0.1% coverage of a real vault. Managed
+with `agi-memory alias list | add <term> <canonical> [--category C] | rm <term>`
+(`GraphLayer.add_alias` / `remove_alias` / `list_aliases`). Removal matters: a
+wrong entry rewrites every term it matches, at both write and query time.
+
 ### `core_memory_blocks` Table (Pinned Invariants)
 Stores non-negotiable architectural rules and guidelines injected unconditionally into session startup and recall responses.
 - `id`: INTEGER PRIMARY KEY AUTOINCREMENT
@@ -85,6 +104,7 @@ Tracks agent session lifecycles, duration, touched files, events, and git commit
   - `ended_at`: TEXT
   - `duration_seconds`: REAL
   - `status`: TEXT DEFAULT 'active' (`active`, `completed`, `aborted`)
+  - `outcome`: TEXT DEFAULT 'unknown' (`completed`, `abandoned`, `blocked`, `superseded`, `unknown`). Set by `set_outcome()` or `end_session(outcome=...)`. Everything except `completed` is non-resumable, and a recap of one carries a do-not-resume warning — an unmarked session stays `unknown` and is treated the same way.
   - `goal`: TEXT
   - `summary`: TEXT
   - `git_branch`: TEXT
@@ -118,8 +138,12 @@ Zero-dependency AST and streaming regex symbol index and dependency graph.
 ### `observations.jsonl`
 Append-only, newline-delimited JSON. One observation per line:
 ```json
-{"guid": "obs_123...", "project": "my-app", "type": "decision", "title": "JWT Auth", "narrative": "...", "facts": "...", "created_at_epoch": 1726000000}
+{"guid": "obs_123...", "project": "my-app", "type": "decision", "title": "JWT Auth", "narrative": "...", "facts": "...", "created_at_epoch": 1726000000, "rationale": "...", "supersedes_refs": "[\"a1b2...\"]", "origin": "user-confirmed"}
 ```
+
+`export_dirty_to_vault` selects a fixed column list, so a column added to
+`observations` and not added there is silently dropped at the machine boundary.
+That has bitten `rationale` once already.
 
 ### `graph.jsonl`
 Append-only, newline-delimited JSON. Stores both nodes and edges:

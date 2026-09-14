@@ -32,7 +32,10 @@ It is a proxy and says so in its own output. Measuring real usage failure needs
 a model in the loop; this measures whether correct use is *possible*, which is
 the deterministic half. Verified sensitive: removing the rationale rendering,
 the supersession pointer and the do-not-resume warning drops actionability from
-5/5 to 2/5 while retrieval stays at 5/5.
+5/5 to 2/5 while retrieval stays at 5/5. It also asserts that a memory
+bootstrapped out of git history announces itself rather than reading like a
+decision somebody stood behind. Currently 6/6 actionability and 2/2 session
+recap.
 
 `eval_l4.py` indexes a fixture repository whose call edges are true by
 construction — Python, TypeScript and Go — and scores callers, dependencies,

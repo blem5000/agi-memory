@@ -82,18 +82,18 @@ Run the automated stdio protocol verification:
 ```bash
 agi-integrate test
 ```
-Verifies `initialize`, `ping`, and tools registration across all 15 native tools.
+Verifies `initialize`, `ping`, and tools registration across all 16 native tools.
 
 ---
 
 ## The Standard MCP Tools
 
-Every integrated tool gains access to 15 native tools across the four cognitive pillars:
+Every integrated tool gains access to 16 native tools across the four cognitive pillars:
 
 | Cognitive Pillar | MCP Tool | Primary Use | Example Query / Action |
 |---|---|---|---|
 | **Epistemic** | `memory_recall` | Fast L1 working memory search | `{"query": "auth migration", "project": "my-app"}` |
-| **Epistemic** | `memory_record` | In-flight curation & conflict steering | `{"text": "Use SQLite FTS5", "title": "DB Arch", "category": "architecture", "supersedes": "#101"}` |
+| **Epistemic** | `memory_record` | In-flight curation & conflict steering | `{"text": "Use SQLite FTS5", "title": "DB Arch", "category": "architecture", "supersedes": "#101", "rationale": "a vector DB was 500MB for 6% better recall", "origin": "user-confirmed"}` |
 | **Epistemic** | `memory_pin` | Pin invariants to Core Memory | `{"key": "zero_pip_deps", "content": "Zero external pip dependencies"}` |
 | **Epistemic** | `memory_unpin` | Unpin an invariant from Core Memory | `{"key": "zero_pip_deps"}` |
 | **Epistemic** | `memory_blocks` | List active Core Memory blocks | `{"project": "agent-memory"}` |
@@ -101,6 +101,7 @@ Every integrated tool gains access to 15 native tools across the four cognitive 
 | **Semantic** | `memory_recall_deep` | Deep L1 + L2 knowledge graph search | `{"query": "state management architecture"}` |
 | **Semantic** | `memory_promote` | Curate session learnings into L2 Graph | `{"project": "my-app", "limit": 20}` |
 | **Episodic** | `memory_timeline` | Past session timeline & recaps | `{"project": "my-app", "limit": 5}` |
+| **Episodic** | `memory_session_outcome` | Record how a session ended | `{"outcome": "abandoned"}` — anything but `completed` is recapped with a do-not-resume warning |
 | **Episodic** | `memory_sync` | Synchronize vault with Git/compaction | `{"action": "sync"}` / `{"action": "dedupe"}` |
 | **Structural Code** | `code_structure` | Hierarchical symbol tree | `{"path": "src/services", "project": "my-app"}` |
 | **Structural Code** | `code_callers` | Inbound callers & references via CTE | `{"symbol": "get_default_db", "max_depth": 3}` |
