@@ -165,6 +165,7 @@ in [Installation](docs/installation.md).
 | [Python API](docs/python-api.md) | Using it directly from Python |
 | [Testing & Evals](docs/testing.md) | How it's tested, and where it falls short |
 | [Benchmarks](docs/benchmarks.md) | Speed and memory measurements |
+| [Hybrid Semantic Recall](docs/semantic.md) | Optional Potion/model2vec vectors fused with BM25 via RRF (`memory_recall` mode) |
 | [Integrations](INTEGRATIONS.md) | Manual setup snippets for each assistant |
 
 ## License

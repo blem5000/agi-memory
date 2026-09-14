@@ -9,10 +9,48 @@ except ImportError:
     from layers.base import Hit, MemoryLayer
 
 
+def _lexical_fallback(l1, query, limit):
+    try:
+        return l1.search(query, limit=limit)
+    except Exception:
+        return []
+
+
+def _hybrid_recent(query, l1, limit, mode, backend):
+    """Try hybrid RRF recall; return (hits, info). Never raises."""
+    info = {"mode": "lexical", "note": ""}
+    try:
+        try:
+            from agi_memory.layers import semantic_layer as sem
+        except ImportError:
+            from layers import semantic_layer as sem
+    except Exception:
+        return _lexical_fallback(l1, query, limit), info
+    if not sem.semantic_enabled() or str(mode).lower() == "lexical":
+        return _lexical_fallback(l1, query, limit), info
+    if not (hasattr(l1, "_bodies_by_id") and hasattr(l1, "db_path")):
+        # Test doubles / non-SQLite layers stay lexical.
+        return _lexical_fallback(l1, query, limit), info
+    try:
+        be = backend or sem.get_backend()
+    except Exception as e:  # model2vec missing, model not downloadable, ...
+        info["note"] = str(e)
+        return _lexical_fallback(l1, query, limit), info
+    try:
+        hits, hinfo = sem.hybrid_search(query, l1, be, limit=limit)
+        hinfo.setdefault("note", "")
+        return hits, hinfo
+    except Exception:
+        return _lexical_fallback(l1, query, limit), info
+
+
 def recall(query: str, l1: MemoryLayer, l2: MemoryLayer | None = None,
-           limit: int = 5, deep: bool = False) -> dict:
-    recent = l1.search(query, limit=limit)
-    result: dict = {"recent": recent, "durable": []}
+           limit: int = 5, deep: bool = False, mode: str = "auto",
+           backend=None) -> dict:
+    recent, hinfo = _hybrid_recent(query, l1, limit, mode, backend)
+    result: dict = {"recent": recent, "durable": [], "mode": hinfo.get("mode", "lexical")}
+    if hinfo.get("note"):
+        result["semantic_note"] = hinfo["note"]
     
     if hasattr(l1, "get_pinned_blocks"):
         try:
@@ -54,12 +92,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--project", "-p", default=None, help="Filter by project name")
     parser.add_argument("--limit", "-l", type=int, default=5, help="Hit limit (default 5)")
     parser.add_argument("--deep", "-d", action="store_true", help="Force deep recall from durable layer")
+    parser.add_argument("--mode", "-m", default="auto",
+                        choices=["auto", "lexical", "hybrid", "semantic"],
+                        help="Recall mode: auto (hybrid when a backend loads), lexical, or hybrid/semantic (needs the 'semantic' extra)")
     args = parser.parse_args(argv)
 
     l1 = SessionLayer(project=args.project)
     l2 = GraphLayer(project=args.project)
 
-    res = recall(args.query, l1, l2, limit=args.limit, deep=args.deep)
+    res = recall(args.query, l1, l2, limit=args.limit, deep=args.deep, mode=args.mode)
+    print(f"[mode: {res.get('mode', 'lexical')}]")
+    if res.get("semantic_note"):
+        print(f"({res['semantic_note']})")
     if res.get("core"):
         print("## core memory (pinned)")
         for b in res["core"]:

@@ -18,6 +18,13 @@ classifiers = [
 ]
 dependencies = []
 
+# Optional semantic-recall extra. Core stays zero-dependency (see
+# rules/architecture.md): model2vec/numpy are imported lazily by
+# src/agi_memory/layers/semantic_layer.py and every read path falls back
+# to pure-lexical FTS5 when they are absent.
+[project.optional-dependencies]
+semantic = ["model2vec>=0.2", "numpy>=1.24"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
