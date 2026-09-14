@@ -868,3 +868,49 @@ looked like, which is worth keeping while item 17's fix is young.
 are invisible at the call site. Nothing in a test that says
 `SessionLayer(db_path=tmp)` suggests it is also writing to `~/.agi-memory` and
 pushing to GitHub. Treat any new global listener as suspect for the same reason.
+
+---
+
+## 18. The identifier row was one probe; constants were not indexed at all — FIXED (2026-09-14)
+
+Raised by a reader of the posted eval: *"how much does the code graph recover
+when wording changes but symbol names or file paths stay stable — is that
+category broken out?"*
+
+It was broken out, and it was **1/1**. One probe (`getUserById` vs
+`get_user_by_id`) sitting in a table beside categories with sixteen to nineteen.
+A passing test presented as a measurement.
+
+**Widened to 15 probes** across the shapes that actually occur: camelCase,
+PascalCase, kebab, flattened, SCREAMING_SNAKE against both camel and snake, a
+member path (`AuthTokenStore.rotateSigningKey`), and a class name queried in
+snake. Result: **14/15 (93%)** — the claim survived, which is the only reason
+it is worth quoting now.
+
+The two things it exposed are worth more than the number:
+
+1. **Module-level constants were never indexed.** `MAX_RETRY_COUNT = 5` created
+   no symbol, so `code_callers` on it returned nothing and `code_impact`
+   reported no blast radius — for precisely the kind of shared value (a
+   timeout, a limit, a feature flag) whose blast radius is the reason anyone
+   asks. Now indexed as `kind='constant'` (uppercase names at module scope
+   only, so locals stay out), and referencing one emits an edge, since a
+   constant is referenced rather than called and the `ast.Call` walk could
+   never see it.
+2. **A member path does not resolve.** `AuthTokenStore.rotateSigningKey` misses
+   where `rotateSigningKey` hits. That is the 1 in 14/15 and it is left open:
+   `qualified_name` is stored but not consulted by the identifier fallback.
+
+**Also corrected**: the fixture declared the constant without referring to it,
+so even after indexing, its probe measured nothing — `get_callers` traverses
+CALLS/IMPORTS/EXTENDS/IMPLEMENTS, and a symbol nothing refers to has no callers.
+
+**Numbers now** (was 20/60 = 33%): morphological 13/19, typo 5/22, identifier
+14/15, abbreviation 1/6, paraphrase 1/18. **Overall 34/80 = 42%.** The rise is
+mostly the identifier category gaining weight, not the matcher improving — say
+that when quoting it.
+
+**Unexplained, flagged rather than buried**: L3 paraphrase reads 1/6 where an
+earlier run today read 0/6, stable across three consecutive runs since. Not
+isolated. L4 morphological and typo are 0/4 each now rather than 0/1 — the same
+failure, better sampled.

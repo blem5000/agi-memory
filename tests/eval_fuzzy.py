@@ -105,6 +105,24 @@ CODE_FIXTURE = {
     # be a real fuzzy lookup, not a hit on a different symbol that happens to exist.
     "svc/users.py": "def get_user_by_id(uid):\n    return uid\n\n"
                     "def load_profile(uid):\n    return get_user_by_id(uid)\n",
+    # A reader asked how much the code graph recovers when wording changes but
+    # the symbol stays stable. The honest answer was that the identifier
+    # category had ONE probe behind it, which is a pass rather than a
+    # measurement. These add the shapes that actually occur across languages:
+    # camelCase and PascalCase from JS/TS and Dart, kebab from CSS and CLI
+    # flags, SCREAMING_SNAKE constants, and dotted or slashed member paths.
+    "svc/billing.py": "def refund_payment(charge_id):\n    return charge_id\n\n"
+                      "def issue_credit_note(charge_id):\n    return refund_payment(charge_id)\n",
+    # The constant is referenced, not merely declared: get_callers traverses
+    # CALLS/IMPORTS/EXTENDS/IMPLEMENTS, so a symbol nothing refers to has no
+    # callers and its probe measures nothing.
+    "svc/cache.py": "MAX_RETRY_COUNT = 5\n\n"
+                    "def invalidate_cache_entry(key):\n"
+                    "    for _ in range(MAX_RETRY_COUNT):\n        pass\n    return key\n\n"
+                    "def purge(key):\n    return invalidate_cache_entry(key)\n",
+    "svc/auth_service.py": "class AuthTokenStore:\n"
+                           "    def rotate_signing_key(self):\n        return True\n\n"
+                           "def bootstrap():\n    return AuthTokenStore().rotate_signing_key()\n",
 }
 
 # (exact symbol that resolves, {category: degraded spelling})
@@ -114,6 +132,32 @@ CODE_PROBES = [
         "typo": "get_user_by_i",
         "morphological": "get_users_by_id",
     }),
+    ("get_user_by_id", {"identifier": "GetUserById"}),        # PascalCase
+    ("get_user_by_id", {"identifier": "get-user-by-id"}),     # kebab
+    ("get_user_by_id", {"identifier": "getuserbyid"}),        # flattened
+    ("refund_payment", {
+        "identifier": "refundPayment",
+        "typo": "refund_paymnt",
+        "morphological": "refund_payments",
+    }),
+    ("refund_payment", {"identifier": "RefundPayment"}),
+    ("refund_payment", {"identifier": "refund-payment"}),
+    ("invalidate_cache_entry", {
+        "identifier": "invalidateCacheEntry",
+        "typo": "invalidate_cach_entry",
+        "morphological": "invalidate_cache_entries",
+    }),
+    ("invalidate_cache_entry", {"identifier": "InvalidateCacheEntry"}),
+    ("MAX_RETRY_COUNT", {"identifier": "maxRetryCount"}),      # constant vs camel
+    ("MAX_RETRY_COUNT", {"identifier": "max_retry_count"}),    # constant vs snake
+    ("rotate_signing_key", {
+        "identifier": "rotateSigningKey",
+        "typo": "rotate_signng_key",
+        "morphological": "rotate_signing_keys",
+    }),
+    ("rotate_signing_key", {"identifier": "AuthTokenStore.rotateSigningKey"}),  # member path
+    ("AuthTokenStore", {"identifier": "auth_token_store"}),    # class in snake
+    ("AuthTokenStore", {"identifier": "authTokenStore"}),
 ]
 
 

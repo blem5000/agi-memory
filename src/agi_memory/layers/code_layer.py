@@ -143,6 +143,40 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
             self.generic_visit(node)
             self.scope_stack.pop()
 
+        def visit_Assign(self, node: ast.Assign):
+            # Module-level constants were never indexed, so `code_callers` on
+            # one returned nothing and `code_impact` reported no blast radius --
+            # for exactly the kind of shared value (a timeout, a limit, a
+            # feature flag) whose blast radius is the reason to ask. Only
+            # SCREAMING_SNAKE names at module scope: locals and ordinary
+            # assignments are noise, not structure.
+            if self.scope_stack:
+                self.generic_visit(node)
+                return
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                name = target.id
+                if not name.isupper() or len(name) < 2:
+                    continue
+                symbols.append({
+                    "name": name,
+                    "qualified_name": name,
+                    "kind": "constant",
+                    "signature": f"{name} = ...",
+                    "docstring": "",
+                    "start_line": node.lineno,
+                    "end_line": getattr(node, "end_lineno", node.lineno),
+                    "parent_symbol": None,
+                })
+                edges.append({
+                    "source": rel_path,
+                    "relation": "DEFINES",
+                    "target": name,
+                    "line": node.lineno,
+                })
+            self.generic_visit(node)
+
         def visit_FunctionDef(self, node: ast.FunctionDef):
             self._handle_function(node, is_async=False)
 
@@ -189,6 +223,24 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
                             "source": caller_name,
                             "relation": "CALLS",
                             "target": callee,
+                            "line": getattr(sub_node, "lineno", node.lineno)
+                        })
+
+                # A constant is referenced, not called, so the walk above never
+                # produced an edge for it and `code_callers` on a shared limit
+                # or flag came back empty. Uppercase names only: that is the
+                # convention for a module constant, and it keeps ordinary local
+                # variables out of the graph. Recorded as CALLS because that is
+                # the relation get_callers traverses; the distinction between
+                # calling and referencing is not one the blast-radius question
+                # cares about.
+                elif isinstance(sub_node, ast.Name) and isinstance(sub_node.ctx, ast.Load):
+                    ref = sub_node.id
+                    if ref.isupper() and len(ref) > 1:
+                        edges.append({
+                            "source": caller_name,
+                            "relation": "CALLS",
+                            "target": ref,
                             "line": getattr(sub_node, "lineno", node.lineno)
                         })
 
