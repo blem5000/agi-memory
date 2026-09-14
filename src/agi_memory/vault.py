@@ -347,7 +347,7 @@ def export_dirty_to_vault(
             cur = con.execute("""
                 SELECT project, type, title, subtitle, facts, narrative,
                        concepts, files_read, files_modified, created_at,
-                       created_at_epoch, content_hash
+                       created_at_epoch, content_hash, rationale, supersedes_refs
                 FROM observations
                 ORDER BY created_at_epoch ASC
             """)
@@ -511,7 +511,8 @@ def import_from_vault(
                     d.get("generated_by_model", "sync"),
                     d.get("relevance_count", 0),
                     d.get("sync_rev", "vault"),
-                    d.get("rationale")
+                    d.get("rationale"),
+                    d.get("supersedes_refs")
                 ))
                 existing_hashes.add(ch)
 
@@ -521,11 +522,44 @@ def import_from_vault(
                     memory_session_id, project, type, title, subtitle, facts,
                     narrative, concepts, files_read, files_modified, prompt_number,
                     discovery_tokens, created_at, created_at_epoch, content_hash,
-                    generated_by_model, relevance_count, sync_rev, rationale
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    generated_by_model, relevance_count, sync_rev, rationale,
+                    supersedes_refs
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, rows_to_insert)
             con.commit()
             imported_obs = len(rows_to_insert)
+
+        # Re-link supersession. `superseded_by` holds a row id, which is local to
+        # the machine that wrote it, so a memory imported here would otherwise
+        # arrive with its chain broken: the replacement present, the record it
+        # replaced still reading as current. The content hashes travel with the
+        # record, so resolve them to local ids now.
+        try:
+            by_hash = {
+                r[1]: r[0]
+                for r in con.execute(
+                    "SELECT id, content_hash FROM observations WHERE content_hash IS NOT NULL")
+            }
+            for new_id, refs_raw in con.execute(
+                "SELECT id, supersedes_refs FROM observations "
+                "WHERE supersedes_refs IS NOT NULL AND supersedes_refs != ''"
+            ).fetchall():
+                try:
+                    refs = json.loads(refs_raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                for ref in refs if isinstance(refs, list) else []:
+                    old_id = by_hash.get(ref)
+                    if old_id is None or old_id == new_id:
+                        continue
+                    con.execute(
+                        "UPDATE observations SET type = 'superseded', superseded_by = ? "
+                        "WHERE id = ? AND (superseded_by IS NULL OR type != 'superseded')",
+                        (new_id, old_id))
+            con.commit()
+        except sqlite3.Error:
+            # A broken chain must not fail the import; the memories still arrive.
+            pass
         con.close()
 
     # 2. Import graph nodes and edges into graph_db

@@ -180,7 +180,8 @@ class SessionLayer(MemoryLayer):
                 cols = {r[1] for r in con.execute("PRAGMA table_info(observations)")}
                 if not cols:  # table not created yet; _init_db will build it
                     return
-                for col, decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER")):
+                for col, decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER"),
+                                  ("supersedes_refs", "TEXT")):
                     if col not in cols:
                         con.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
                 con.commit()
@@ -241,7 +242,7 @@ class SessionLayer(MemoryLayer):
                 concepts TEXT, files_read TEXT, files_modified TEXT, prompt_number INT,
                 discovery_tokens INT, created_at TEXT, created_at_epoch INT, content_hash TEXT,
                 generated_by_model TEXT, relevance_count INT, sync_rev TEXT,
-                rationale TEXT, superseded_by INTEGER
+                rationale TEXT, superseded_by INTEGER, supersedes_refs TEXT
             )
         """)
         # Added after the first release. `rationale` is why a decision was made,
@@ -249,7 +250,8 @@ class SessionLayer(MemoryLayer):
         # the prose. `superseded_by` makes the supersession chain walkable: the
         # type flipped to 'superseded' but nothing pointed at the replacement.
         _cols = {r[1] for r in con.execute("PRAGMA table_info(observations)")}
-        for _col, _decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER")):
+        for _col, _decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER"),
+                            ("supersedes_refs", "TEXT")):
             if _col not in _cols:
                 con.execute(f"ALTER TABLE observations ADD COLUMN {_col} {_decl}")
         tokenize = _supported_tokenizer()
@@ -608,6 +610,21 @@ class SessionLayer(MemoryLayer):
                         if cur.rowcount > 0:
                             superseded_ids.append(fid)
 
+        # A row id is local. Another machine importing this memory from the vault
+        # would have no way to re-establish which record it superseded, so store
+        # the content hashes too -- those are stable across machines.
+        supersedes_refs: list[str] = []
+        if superseded_ids:
+            ph = ",".join("?" for _ in superseded_ids)
+            supersedes_refs = [
+                r[0] for r in cur.execute(
+                    f"SELECT content_hash FROM observations WHERE id IN ({ph})",
+                    superseded_ids).fetchall() if r[0]
+            ]
+            if supersedes_refs:
+                cur.execute("UPDATE observations SET supersedes_refs = ? WHERE id = ?",
+                            (json.dumps(supersedes_refs), obs_id))
+
         con.commit()
         con.close()
 
@@ -629,6 +646,7 @@ class SessionLayer(MemoryLayer):
             "created_at_epoch": now_epoch,
             "content_hash": content_hash,
             "rationale": why,
+            "supersedes_refs": json.dumps(supersedes_refs) if supersedes_refs else None,
             "generated_by_model": "agent-memory",
             "relevance_count": 0,
             "sync_rev": "1"

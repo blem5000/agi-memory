@@ -1290,6 +1290,39 @@ with tempfile.TemporaryDirectory() as boot_tmp:
                                 "project": "sample-agent-app"})
     assert bad.startswith("Error:"), bad
 
+    # 4c. Supersession must survive the machine boundary. `superseded_by` holds a
+    # row id, which is local, so a second machine importing the same memories
+    # from the vault used to see the replacement arrive while the record it
+    # replaced still read as current (backlog #11).
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as _hop_dir:
+        _hop = Path(_hop_dir)
+        _v2, _db_a, _db_b = _hop / "vault", _hop / "a.db", _hop / "b.db"
+        _a = SessionLayer(db_path=_db_a, project="hop")
+        _old = _a.record(text="Store sessions in Redis", title="Session Store",
+                         project="hop", category="architecture")
+        _new = _a.record(text="Store sessions in Postgres, Redis is dropped",
+                         title="Session Store v2", project="hop",
+                         category="architecture", supersedes=f"#{_old['id']}",
+                         rationale="one datastore is cheaper to operate than two")
+        assert _old["id"] in _new["superseded_ids"]
+
+        vault.export_dirty_to_vault(vault_dir=_v2, session_db=_db_a, graph_db=_db_a)
+        vault.import_from_vault(vault_dir=_v2, session_db=_db_b, graph_db=_db_b)
+
+        _b = SessionLayer(db_path=_db_b, project="hop")
+        _rows = {r["title"]: r for r in _b.list_observations(project="hop",
+                                                             include_superseded=True)}
+        assert len(_rows) == 2, _rows
+        _moved_old = _rows["Session Store"]
+        _moved_new = _rows["Session Store v2"]
+        assert _moved_old["type"] == "superseded", \
+            f"supersession lost across the machine boundary: {_moved_old['type']}"
+        assert _b.get_observation(_moved_old["id"])["superseded_by"] == _moved_new["id"], \
+            "forward pointer did not survive the vault round trip"
+        assert _b.get_observation(_moved_new["id"])["rationale"].startswith("one datastore"), \
+            "rationale did not survive the export path"
+
     # 5. Search episodic
     ep_hits = ep.search("code graph", limit=5)
     assert len(ep_hits) == 1

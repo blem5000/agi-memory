@@ -8,7 +8,7 @@ Last reviewed: 2026-09-13 (council-reviewed after backlog completion).
 
 ---
 
-## 1. Vault git-sync silently diverges on concurrent machines — CONFIRMED BUG
+## 1. Vault git-sync silently diverges on concurrent machines — FIXED (verified 2026-09-14)
 
 **Severity: high.** Data isolation in a headline feature ("cross-device git sync").
 
@@ -53,6 +53,15 @@ Three distinct problems:
 **Note**: union merge is correct for append-only records. It is NOT correct
 for any file where a line is edited in place. Keep the vault append-only, or
 this fix stops being safe.
+
+**Status**: all three parts were implemented and the item was simply never
+re-labelled. `sync.py` writes the `merge=union` gitattributes at init,
+`ensure_merge_attributes()` repairs an existing vault, and the statuses are now
+distinct (`pull_conflict` / `pull_offline` / `push_rejected`).
+`tests/multi_machine_test.py` drives two isolated HOMEs against a shared bare
+repo through the real CLI and passes 11/11, including the case that used to
+lose data: both machines record before either syncs. A third machine cloning
+fresh sees all three memories.
 
 ---
 
@@ -385,13 +394,24 @@ memory is presented, only of how it is stored.
   recall and `Why:` in `agi-memory inspect`, and carried through the vault so
   it survives the machine boundary. Asked for in the memory-discipline rules.
 
+**Also done (2026-09-14): supersession now survives the machine boundary.**
+`superseded_by` holds a row id, which is local, so a second machine importing
+the same memories saw the replacement arrive while the record it replaced still
+had no pointer to it. Records now carry `supersedes_refs` — the content hashes
+of what they superseded, which are stable across machines — and
+`import_from_vault` resolves those to local ids and rebuilds the chain. The
+export path was also dropping `rationale` entirely, because
+`export_dirty_to_vault` selects a fixed column list that had not been updated;
+both columns now travel. Covered by a test that exports from one database,
+imports into another, and asserts the chain and the rationale both survive;
+verified to fail when the re-link is removed.
+
 **Still open, and it is the harder half**: a stored rationale still returns as
 prose in a retrieved block. Nothing marks it as "argued for under constraints
 that may no longer hold", and nothing records what those constraints were, so a
 wrong decision with good reasoning attached still reads as settled. Confidence
-and constraint capture remain unbuilt. Also unbuilt: supersession does not
-survive a vault import on a second machine, because `superseded_by` holds a
-local row id — the marker text carries over, the link does not.
+and constraint capture remain unbuilt. This is a presentation and modelling
+problem, not a storage one, and no cheap fix closes it.
 
 **Correction to make if this thread continues**: I told the commenter
 supersession was not surfaced. It partly is — the `[SUPERSEDED]` marker exists.
@@ -399,7 +419,7 @@ What is missing is the pointer to the replacement and the rationale.
 
 ---
 
-## 12. Destructive operations have no confirmation gate — OPEN (external offer)
+## 12. Destructive operations have no confirmation gate — DELIVERED (2026-09-14)
 
 The maintainer of HOL Guard offered to add an agi-memory extension that would
 checkpoint `delete --hard`, `pin` and `unpin` while leaving `log`, `inspect`,
@@ -434,7 +454,25 @@ description says a gate should key on the argument instead. Same shape applies
 to `memory_sync`, which is marked destructive on account of `action=dedupe`
 even though `action=sync` and `action=status` are harmless.
 
-**Still open**: replying to the offer and agreeing how Guard hooks in.
+**Done (2026-09-14)**: the extension is written and open as a draft PR against
+hashgraph-online/hol-guard (#2921) — `command.agi-memory`, external and opt-in,
+six reviewed operations at the CLI boundary: `sync dedupe`, `sync init`,
+`delete --hard`, `pin`, `unpin`, `bootstrap`. `sync status`, `log`, `inspect`,
+`blocks`, `outcome`, `recall`, `timeline` and the code-graph queries stay
+automatic.
+
+Two things that only surfaced by reading our own CLI rather than its help text,
+both of which would have left the gate bypassable:
+
+- `agent-memory` is an exact alias of `agi-memory`, and `agent-bootstrap` of
+  `agi-bootstrap`. All six console scripts ship in every install, so a matcher
+  naming one name is bypassed by typing the other.
+- `sync` dispatches on a literal positional. Bare `agi-memory sync` does not
+  reach the sync module at all — it falls through to the installer — so
+  prefix-matching `sync` gates the wrong program.
+
+**Still open**: maintainer review of that PR, and argument-level MCP gating,
+which is Guard-side work.
 
 ---
 
