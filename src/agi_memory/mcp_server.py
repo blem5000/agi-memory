@@ -38,7 +38,7 @@ except ImportError:
     import sync
     import vault
     from vault import append_tombstone_to_vault
-    __version__ = "0.5.0"
+    __version__ = "0.6.0"
 
 TOOLS = [
     {"name": "memory_recall",
