@@ -680,6 +680,54 @@ def cmd_unpin(argv: list[str]) -> None:
         print(f"[!] Block [{argv[0]}] not found or already unpinned.")
 
 
+def cmd_alias(argv: list[str]) -> None:
+    """Curate the L2 entity alias table.
+
+    The table resolves a term to its canonical form at write and query time, so
+    `k8s` and `Kubernetes` reach the same memories. It shipped with 14 seed
+    entries and measured 0.1% coverage of a real vault -- not because the
+    mechanism failed, but because nothing outside the Python API could ever add
+    to it. This is that surface.
+    """
+    usage = ("Usage:\n"
+             "  agi-memory alias list\n"
+             "  agi-memory alias add <term> <canonical> [--category C]\n"
+             "  agi-memory alias rm <term>\n\n"
+             "A term is matched lowercased; the canonical form is stored as written.")
+    if not argv or argv[0] in ("-h", "--help"):
+        print(usage)
+        return
+    sub, rest = argv[0], argv[1:]
+    l2 = GraphLayer()
+    if sub == "list":
+        aliases = l2.list_aliases()
+        if not aliases:
+            print("No aliases.")
+            return
+        width = max(len(a) for a in aliases)
+        for a, c in sorted(aliases.items()):
+            print(f"  {a.ljust(width)}  ->  {c}")
+        print(f"\n{len(aliases)} alias(es).")
+        return
+    if sub == "add":
+        import argparse
+        parser = argparse.ArgumentParser(prog="agi-memory alias add",
+                                         description="Map a term to its canonical form")
+        parser.add_argument("term")
+        parser.add_argument("canonical")
+        parser.add_argument("--category", "-c", default="")
+        args = parser.parse_args(rest)
+        l2.add_alias(args.term, args.canonical, args.category)
+        print(f"[✓] {args.term.strip().lower()} -> {args.canonical.strip()}")
+        return
+    if sub in ("rm", "remove") and rest:
+        term = rest[0]
+        print(f"[✓] Removed alias [{term.strip().lower()}]." if l2.remove_alias(term)
+              else f"[!] No alias [{term.strip().lower()}].")
+        return
+    print(usage)
+
+
 def cmd_blocks(argv: list[str]) -> None:
     import argparse
     parser = argparse.ArgumentParser(prog="agent-memory blocks", description="List core memory blocks")
@@ -858,6 +906,9 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "blocks":
             cmd_blocks(argv[1:])
             return
+        elif cmd == "alias":
+            cmd_alias(argv[1:])
+            return
         elif cmd == "recall":
             cmd_recall(argv[1:])
             return
@@ -905,6 +956,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory pin <key> <content>       Pin critical invariant to core memory")
             print("  agi-memory unpin <key>               Unpin block from core memory")
             print("  agi-memory blocks                    List pinned core memory blocks")
+            print("  agi-memory alias list|add|rm         Curate the synonym/acronym table")
             print("  agi-memory init [PATH]               Wire a project & install the /agi-init slash command")
             print("  agi-memory analyze [PATH] [--json]   Report detected stack, commands, layout")
             print("  agi-memory integrate [COMMAND ...]   Assistant integration & project wiring")

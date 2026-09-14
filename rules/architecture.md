@@ -43,7 +43,7 @@
 7. **Bi-Temporal Knowledge Graph & Canonicalization**:
    - L2 graph edges record temporal validity (`is_active`, `valid_from`, `valid_until`, `superseded_by`).
    - Contradictory edges automatically get invalidated without destroying historical provenance.
-   - Pure-SQL entity aliasing (`graph_aliases`) canonicalizes acronyms and synonyms (e.g. `FCM` -> `FirebaseCloudMessaging`) in <0.01ms without heavyweight embedding models.
+   - Pure-SQL entity aliasing (`graph_aliases`) canonicalizes acronyms and synonyms (e.g. `FCM` -> `FirebaseCloudMessaging`) in <0.01ms without heavyweight embedding models. The table is curated, not learned: 14 seed entries, extended via `agi-memory alias add`. Do not describe it as general synonym support.
 
 8. **Core Memory & Automated Lifecycle Hooks**:
    - Critical system invariants are stored as pinned Core Memory blocks (`core_memory_blocks`) prepended to recall queries.

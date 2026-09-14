@@ -31,7 +31,14 @@ agi-memory pin "zero_pip_deps" "Strictly Python stdlib and sqlite3. No external 
 *Answers: "What does our information mean and how is it connected?"*
 - **Native Recursive CTE Traversal**: Multi-hop relationship querying executed natively inside SQLite via `WITH RECURSIVE` in <0.5ms (0.65ms on 14k records) without GraphRAG or Neo4j overhead.
 - **Bi-Temporal Graph Edges**: Tracks validity windows (`is_active`, `valid_from`, `valid_until`, `superseded_by`). Historical edges remain immutable while contradictory edges are deactivated.
-- **Pure-SQL Entity Alias Layer**: Instant synonym and acronym canonicalization (`FCM` -> `FirebaseCloudMessaging`, `k8s` -> `Kubernetes`, `jwt` -> `JSONWebToken`) in <0.01ms (4.11M lookups/sec).
+- **Pure-SQL Entity Alias Layer**: Instant acronym and synonym canonicalization (`FCM` -> `FirebaseCloudMessaging`, `k8s` -> `Kubernetes`, `jwt` -> `JSONWebToken`) in <0.01ms (4.11M lookups/sec).
+  **It is a curated table, not automatic synonym coverage.** It ships with 14
+  seed entries and learns nothing on its own: measured against a real vault it
+  covered 0.1% of distinct terms. Terms it does not hold (`login` ->
+  `authentication`) do not resolve, and no keyword technique closes that —
+  semantic distance is not surface distance. Add the pairs that matter to you
+  with `agi-memory alias add <term> <canonical>`; `alias list` shows what is
+  there and `alias rm` corrects a wrong one.
 - **Automated L1 -> L2 Graph Prompter (`memory_promote` / `agi-memory promote`)**: Automatically distills and clusters high-signal observations into durable entity-relation triples.
 ```bash
 # Preview or auto-promote candidate triples

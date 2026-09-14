@@ -874,6 +874,15 @@ with tempfile.TemporaryDirectory() as bitemp_tmp:
     assert "gql" in aliases and aliases["gql"] == "GraphQL"
     assert "fcm" in aliases
 
+    # A curated table needs a way back out. A wrong entry rewrites every term it
+    # matches at both write and query time, so without removal one typo is
+    # permanent and the mapping cannot be corrected.
+    assert gl_bt.remove_alias("GQL") is True        # matched lowercased
+    assert gl_bt.resolve_node("gql") == "gql"       # cache dropped it too
+    assert "gql" not in gl_bt.list_aliases()
+    assert gl_bt.remove_alias("gql") is False       # already gone
+    assert gl_bt.remove_alias("  ") is False
+
     # 9b. Canonicalization on add_edge
     gl_bt.add_edge("fcm", "USES", "jwt", "FCM uses JWT for authorization", project="p-bt")
     con = gl_bt._get_con(mode="ro")

@@ -33,6 +33,13 @@ agi-memory recall "state management architecture" --deep
 agi-memory pin "zero_pip_deps" "Zero external pip dependencies" --category architecture
 agi-memory blocks
 agi-memory unpin "zero_pip_deps"
+
+# Curate the entity alias table, so a term and its canonical form reach the same
+# memories. It ships with 14 seed entries and learns nothing on its own -- what
+# is not in it does not resolve.
+agi-memory alias list
+agi-memory alias add k8s Kubernetes --category infra
+agi-memory alias rm k8s
 ```
 
 ### Curating Knowledge (L1 -> L2 Knowledge Graph)

@@ -118,7 +118,7 @@ leaves almost nothing to match.
 
 ---
 
-## 4. Synonyms — PARTIALLY reached, NOT closed (council, 2026-09-13)
+## 4. Synonyms — CLOSED as far as it honestly can be (2026-09-14)
 
 Paraphrase recall is ~6% and no stemming, folding or trigram technique will
 move it: `login` -> `authentication` is semantic distance, not surface
@@ -161,6 +161,29 @@ alias candidates from the corpus (co-occurring terms that never appear in the
 same memory are a poor signal; terms an agent used interchangeably across
 sessions are a better one) or accept that the table only ever holds what a
 human curates, and say so in the README rather than implying synonym support.
+
+**Done (2026-09-14): the second branch, deliberately.** Mining was not built —
+the better signal named above (terms an agent used interchangeably across
+sessions) needs the miss log from the council plan, which does not exist, and
+guessing pairs from co-occurrence would populate the table with noise that
+silently rewrites queries. So the table stays curated, and the two things that
+made "curated" a fiction are fixed:
+
+- **There was no way to curate it.** `add_alias` existed only in the Python
+  API, which is why the table had never gained an entry in real use. There is
+  now `agi-memory alias list | add <term> <canonical> [--category C] | rm
+  <term>`. `remove_alias` is new: a wrong entry rewrites every term it matches
+  at both write and query time, so a table you can only add to is a trap.
+  Covered in `test_offline.py`, including the lowercase match and the cache
+  eviction.
+- **The docs implied it was automatic.** `docs/pillars.md` and
+  `rules/architecture.md` sold "synonym canonicalization" without saying the
+  table holds 14 seed entries and learns nothing. Both now state the 0.1%
+  measurement and point at the CLI. `README.md` never made the claim.
+
+**What remains true and is not a defect to fix here**: paraphrase recall stays
+at ~6% for anything outside the table, and no keyword technique moves it. That
+is item 14's subject, and it is gated on a measurement nobody has run.
 
 ---
 

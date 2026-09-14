@@ -301,6 +301,22 @@ class GraphLayer(MemoryLayer):
             self._alias_cache = {}
         self._alias_cache[a] = c
 
+    def remove_alias(self, alias: str) -> bool:
+        """Drop an alias mapping. A curated table needs a way back out: a wrong
+        entry silently rewrites every term it matches, at write and query time."""
+        a = alias.strip().lower()
+        if not a:
+            return False
+        con = self._get_con(mode="rw")
+        cur = con.cursor()
+        cur.execute("DELETE FROM graph_aliases WHERE alias = ?", (a,))
+        removed = cur.rowcount > 0
+        con.commit()
+        con.close()
+        if getattr(self, "_alias_cache", None):
+            self._alias_cache.pop(a, None)
+        return removed
+
     def list_aliases(self) -> dict[str, str]:
         """Return dictionary of alias -> canonical_name."""
         con = self._get_con(mode="ro")
