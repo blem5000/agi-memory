@@ -15,13 +15,14 @@ re-deriving it.
 
 | Item | Gate | Who or what clears it |
 | :--- | :--- | :--- |
-| 7. Distribution | Nobody outside the author has used this. Every priority question after it is guesswork. | The maintainer posting it. Not a code task. |
+| 7. Distribution | ~~Nobody outside the author has used this~~ — **posted to Reddit 2026-09-14**. Now waiting on the first issue, question or install report from a stranger, which is the evidence item 11 needs. | Done; watching. |
 | 14. Static embeddings | ~~Measure first~~ — **measured 2026-09-14 and closed**. Paraphrase recall went 0/18 to 1/6 with 500 real distractors, for 89 MB of Rust and C dependencies plus a 307 MB model cache. The number did not move; the item died, as its own gate said it would. | Done. |
 | 15. Usage failure, remaining half | Measuring whether a model *used* a memory correctly needs a model in the loop — a network call and a dependency. `eval_usage.py` measures the deterministic floor and says so. | A separate opt-in harness, or accepting the proxy. |
 | 11. Contextual applicability | Recording what a decision depended on, so something can flag when those conditions stop holding. A modelling problem, and no cheap storage change closes it — a constraints field would return as more indistinguishable prose, which is the failure it is meant to fix. | A real design, prompted by a real case. |
 
-Item 11 waits on evidence item 7 would produce. (Item 14 no longer waits on
-anything: its measurement was run on 2026-09-14 and closed it.) That ordering is
+Item 11 waits on evidence item 7 would produce — and item 7 has now been posted,
+so that evidence is in flight rather than hypothetical. (Item 14 no longer waits
+on anything: its measurement was run on 2026-09-14 and closed it.) That ordering is
 the point: distribution is not a nice-to-have at the end of the list, it is
 what makes the rest of the list decidable.
 
@@ -225,12 +226,33 @@ sessions. This remembers — in 32MB, with no dependencies."
 
 ---
 
-## 7. Distribution: it has never been posted — OPEN (gated: maintainer, not a code task)
+## 7. Distribution: it has never been posted — POSTED (2026-09-14), now waiting on signal
 
 0 stars, 0 forks, no external users, no issues, 5 PyPI releases. That is not a
 demand signal; nothing has been posted anywhere a user would find it. Every
 remaining priority question (what to build, what 1.0 means) is guesswork until
 one stranger has used it.
+
+**Posted to Reddit, 2026-09-14.** The gate is cleared: the project is now
+somewhere a stranger can find it, and the comment threads have already produced
+four backlog items (11, 14, 15, 16) — one of which, 14, was measured and killed
+on the evidence.
+
+**State at the moment of posting**, so later numbers mean something: 4 stars,
+1 fork, 0 issues, 0 watchers, 6 PyPI releases (0.6.0).
+
+**What to actually watch for**, in rough order of how much it should change
+plans:
+1. **An issue or a question from someone who installed it.** The first one is
+   worth more than any star count — it is the first evidence of a real use.
+2. **Which pillar people ask about.** The build order after this should follow
+   what strangers care about, not what is next in this file.
+3. **Where it breaks on a machine that is not this one.** Every install path
+   here has been exercised by its author.
+
+**What not to read into it**: stars are not usage, and an upvote is not a user.
+Do not let a good thread reopen item 14 or start a trust framework (item 16)
+without the measurement each of those entries asks for.
 
 ---
 
