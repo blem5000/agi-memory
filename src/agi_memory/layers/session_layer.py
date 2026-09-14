@@ -175,6 +175,13 @@ class SessionLayer(MemoryLayer):
         proj = project if project is not None else self.project
         try:
             con = open_db(self.db_path, readonly=True)
+        except sqlite3.Error:
+            return 0
+        # Closed in finally: another layer can create the database file before
+        # the observations table exists, so this raised "no such table" on the
+        # first recall of a fresh store and leaked the connection -- a handle per
+        # MCP process, and a locked file Windows would not delete.
+        try:
             if proj in ("agi-memory", "agent-memory"):
                 row = con.execute(
                     "SELECT count(*) FROM observations WHERE project IN ('agi-memory','agent-memory')"
@@ -183,10 +190,11 @@ class SessionLayer(MemoryLayer):
                 row = con.execute("SELECT count(*) FROM observations WHERE project = ?", (proj,)).fetchone()
             else:
                 row = con.execute("SELECT count(*) FROM observations").fetchone()
-            con.close()
             return int(row[0]) if row else 0
         except sqlite3.Error:
             return 0
+        finally:
+            con.close()
 
     def _migrate_columns_if_needed(self) -> None:
         """Add columns introduced after a database was first created.
@@ -375,8 +383,10 @@ class SessionLayer(MemoryLayer):
         elif self.project:
             sql += " AND project = ?"
             args.append(self.project)
-        rows = con.execute(sql, args).fetchall()
-        con.close()
+        try:
+            rows = con.execute(sql, args).fetchall()
+        finally:
+            con.close()
         by_id = {}
         for row in rows:
             i, p, t, f, n = row[0], row[1], row[2], row[3], row[4]
@@ -419,49 +429,54 @@ class SessionLayer(MemoryLayer):
         if not tokens:
             return []
         con = open_db(self.db_path, readonly=True)
-        sql = """SELECT observations.id FROM observations_fts
-                 JOIN observations ON observations.id = observations_fts.rowid
-                 WHERE observations_fts MATCH ?"""
-        args: list = [" OR ".join(tokens)]
-        if self.project in ("agi-memory", "agent-memory"):
-            sql += " AND (project = 'agi-memory' OR project = 'agent-memory')"
-        elif self.project:
-            sql += " AND project = ?"
-            args.append(self.project)
-        sql += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
-            "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
-        args.append(limit)
-        rows = con.execute(sql, args).fetchall()
+        # Closed in finally: on a fresh store whose file another layer created,
+        # the MATCH below raised "no such table: observations_fts" and the
+        # connection leaked, once per process, on the very first recall.
+        try:
+            sql = """SELECT observations.id FROM observations_fts
+                     JOIN observations ON observations.id = observations_fts.rowid
+                     WHERE observations_fts MATCH ?"""
+            args: list = [" OR ".join(tokens)]
+            if self.project in ("agi-memory", "agent-memory"):
+                sql += " AND (project = 'agi-memory' OR project = 'agent-memory')"
+            elif self.project:
+                sql += " AND project = ?"
+                args.append(self.project)
+            sql += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
+                "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
+            args.append(limit)
+            rows = con.execute(sql, args).fetchall()
 
-        # Fallback: prefix wildcard matching if standard query returned 0 rows
-        if not rows and tokens:
-            prefix_tokens = [f'"{t}"*' for t in tokens if len(t) >= 3]
-            if prefix_tokens:
-                sql_pfx = """SELECT observations.id FROM observations_fts
-                             JOIN observations ON observations.id = observations_fts.rowid
-                             WHERE observations_fts MATCH ?"""
-                args_pfx = [" OR ".join(prefix_tokens)]
-                if self.project in ("agi-memory", "agent-memory"):
-                    sql_pfx += " AND (project = 'agi-memory' OR project = 'agent-memory')"
-                elif self.project:
-                    sql_pfx += " AND project = ?"
-                    args_pfx.append(self.project)
-                sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
-                    "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
-                args_pfx.append(limit)
-                rows = con.execute(sql_pfx, args_pfx).fetchall()
+            # Fallback: prefix wildcard matching if standard query returned 0 rows
+            if not rows and tokens:
+                prefix_tokens = [f'"{t}"*' for t in tokens if len(t) >= 3]
+                if prefix_tokens:
+                    sql_pfx = """SELECT observations.id FROM observations_fts
+                                 JOIN observations ON observations.id = observations_fts.rowid
+                                 WHERE observations_fts MATCH ?"""
+                    args_pfx = [" OR ".join(prefix_tokens)]
+                    if self.project in ("agi-memory", "agent-memory"):
+                        sql_pfx += " AND (project = 'agi-memory' OR project = 'agent-memory')"
+                    elif self.project:
+                        sql_pfx += " AND project = ?"
+                        args_pfx.append(self.project)
+                    sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
+                        "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
+                    args_pfx.append(limit)
+                    rows = con.execute(sql_pfx, args_pfx).fetchall()
 
-        # Last resort: tolerate a typo INSIDE a word. Stemming repairs damage at
-        # the end of a word ("dependencie"); a character wrong in the middle
-        # ("dependncies") survives no tokenizer, and measured 10% recall on the
-        # real vault. Runs only when everything above found nothing, so it can
-        # never outrank a real match.
-        fuzzy = False
-        if not rows and tokens:
-            rows = self._typo_fallback(con, tokens, limit)
-            fuzzy = bool(rows)
+            # Last resort: tolerate a typo INSIDE a word. Stemming repairs damage at
+            # the end of a word ("dependencie"); a character wrong in the middle
+            # ("dependncies") survives no tokenizer, and measured 10% recall on the
+            # real vault. Runs only when everything above found nothing, so it can
+            # never outrank a real match.
+            fuzzy = False
+            if not rows and tokens:
+                rows = self._typo_fallback(con, tokens, limit)
+                fuzzy = bool(rows)
 
-        con.close()
+        finally:
+            con.close()
         hits = self._bodies_by_id([str(i) for (i,) in rows])
         if fuzzy:
             # Measured on the real vault, roughly one in seven of these is not

@@ -1414,6 +1414,49 @@ finally:
     _sync_atomic.schedule_auto_sync = _real_sched
     _sync_atomic.load_sync_config = _real_load2
 
+# 10i. A recall must not leak its connection when the store is not ready.
+# Since the MCP server registers a session on its first call, the database file
+# exists before the observations tables do. The first recall of every fresh
+# store then raised "no such table" inside SessionLayer's read paths and left
+# both connections open: a handle per MCP process, and on Windows a file the
+# test's TemporaryDirectory could not delete (WinError 32 on miss.db).
+from agi_memory.layers import session_layer as _sl_leakmod
+from agi_memory.layers.episodic_layer import EpisodicLayer as _EL_leak
+with tempfile.TemporaryDirectory() as _lk_tmp:
+    _lk_db = Path(_lk_tmp) / "not_ready.db"
+    _EL_leak(db_path=_lk_db, project="leak-proj").start_session(project="leak-proj")  # file exists, no L1 tables
+    _lk_opened = []
+    _lk_real_open = _sl_leakmod.open_db
+
+    def _lk_track(*_a, **_k):
+        _c = _lk_real_open(*_a, **_k)
+        _lk_opened.append(_c)
+        return _c
+    _sl_leakmod.open_db = _lk_track
+    try:
+        _lk_layer = SessionLayer(db_path=_lk_db, project="leak-proj")
+        assert _lk_layer.search("anything at all") == []
+        assert _lk_layer.count_observations(project="leak-proj") == 0
+        # _bodies_by_id is only reached after a search found rows, and search()
+        # catches sqlite3.Error, so raising here is correct. The point is that
+        # the connection is closed on the way out.
+        try:
+            _lk_layer._bodies_by_id(["1"])
+        except sqlite3.OperationalError:
+            pass
+    finally:
+        _sl_leakmod.open_db = _lk_real_open
+    _lk_still_open = []
+    for _c in _lk_opened:
+        try:
+            _c.total_changes  # raises once the connection is closed
+            _lk_still_open.append(_c)
+        except sqlite3.ProgrammingError:
+            pass
+    for _c in _lk_still_open:
+        _c.close()
+    assert not _lk_still_open, f"{len(_lk_still_open)} SessionLayer connection(s) leaked on a store without L1 tables"
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)
