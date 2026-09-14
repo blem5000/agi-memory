@@ -784,19 +784,31 @@ class GooseIntegration(ToolIntegration):
         return f"extensions:\n  agent-memory:\n    type: stdio\n    cmd: {py_path}\n    args:\n      - {srv_path}\n    enabled: true"
 
 
-class ClineIntegration(JsonMcpToolIntegration):
-    name = "cline"
-    display_name = "Cline (VS Code)"
+class VSCodeExtensionIntegration(JsonMcpToolIntegration):
+    """A VS Code extension storing MCP servers in cline_mcp_settings.json.
+
+    Roo Code is a Cline fork and still reads the same settings filename from its
+    own extension directory, so the only thing that varies between them is the
+    extension id and where their rules live.
+    """
+
+    extension_id = ""
     extra_server_fields = {"disabled": False, "autoApprove": []}
 
     def _get_base_dir(self) -> Path:
-        return vscode_extension_settings_dir("saoudrizwan.claude-dev")
+        return vscode_extension_settings_dir(self.extension_id)
 
     def is_detected(self) -> bool:
         return self._get_base_dir().parent.exists() or shutil.which("code") is not None
 
     def get_config_path(self, scope: str = "user") -> Path:
         return self._get_base_dir() / "cline_mcp_settings.json"
+
+
+class ClineIntegration(VSCodeExtensionIntegration):
+    name = "cline"
+    display_name = "Cline (VS Code)"
+    extension_id = "saoudrizwan.claude-dev"
 
     def get_rules_path(self, scope: str = "user") -> Optional[Path]:
         # Directory form: .clinerules/ holds rule files AND workflows/.
@@ -804,19 +816,10 @@ class ClineIntegration(JsonMcpToolIntegration):
         return Path.cwd() / ".clinerules" / "agent-memory.md"
 
 
-class RooCodeIntegration(JsonMcpToolIntegration):
+class RooCodeIntegration(VSCodeExtensionIntegration):
     name = "roo"
     display_name = "Roo Code (VS Code)"
-    extra_server_fields = {"disabled": False, "autoApprove": []}
-
-    def _get_base_dir(self) -> Path:
-        return vscode_extension_settings_dir("rooveterinaryinc.roo-cline")
-
-    def is_detected(self) -> bool:
-        return self._get_base_dir().parent.exists() or shutil.which("code") is not None
-
-    def get_config_path(self, scope: str = "user") -> Path:
-        return self._get_base_dir() / "cline_mcp_settings.json"
+    extension_id = "rooveterinaryinc.roo-cline"
 
     def get_rules_path(self, scope: str = "user") -> Optional[Path]:
         return Path.cwd() / ".roomodes"
