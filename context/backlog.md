@@ -452,3 +452,51 @@ Recorded here because item 12 cites the original incident: the operation is
 still the most destructive one in the system and still deserves a confirmation
 gate, but the specific defect that caused the data loss is gone and tested.
 
+---
+
+## 14. Static embeddings could close the synonym gap without the 500MB — OPEN
+
+Raised by a commenter pointing at [Model2Vec / potion](https://huggingface.co/collections/minishlab/potion)
+and the [semble](https://github.com/MinishLab/semble) code-search MCP built on it.
+
+**Why this one matters more than the usual "just use embeddings" reply.** It
+attacks the premise rather than the tradeoff. Potion models are *static*
+embeddings: a token to vector lookup table distilled from a sentence
+transformer, so inference is tokenize and mean-pool, with no forward pass and
+no torch. Tens of MB, CPU-only. The "500MB and 200-500ms" argument this project
+leans on does not apply to them, and repeating it against this suggestion would
+be dishonest.
+
+It also targets exactly the measured gap. Item 4 established that synonym
+recall is ~6% and that the alias table covers 0.1% of the real vocabulary.
+Semantic similarity is the only thing that closes that.
+
+**What would actually have to be solved** (in order of difficulty, not order of
+mention):
+
+1. **The tokenizer is the dependency, not the model.** Model2Vec uses the
+   HuggingFace `tokenizers` package, which is Rust. Zero-dependency means
+   reimplementing the tokenizer over the shipped `tokenizer.json` in pure
+   Python. This is the real work; everything else is arithmetic.
+2. **The math is free.** Cosine over a few thousand vectors of a few hundred
+   dimensions is milliseconds in pure Python. Not a constraint. Storage of the
+   vectors in SQLite is a blob column, also not a constraint.
+3. **Distribution is the actual decision.** A 8-32MB model either bloats the
+   wheel or needs a first-run download, and a download breaks the offline
+   guarantee that is a stated property of this project. Neither is obviously
+   right.
+4. **Licensing and provenance** of a shipped model file, which this project has
+   never had to think about.
+
+**Proposed shape if picked up**: `pip install agi-memory[semantic]`. BM25 stays
+the zero-dependency default and the offline guarantee holds for it; semantic
+recall is opt-in, and its absence degrades to today's behaviour rather than
+failing. That keeps the differentiator honest instead of quietly abandoning it.
+
+**Do not start with the integration.** Start by measuring whether it is worth
+it: embed the existing vault with potion, run `tests/eval_fuzzy.py`'s synonym
+category against it, and compare with the 6% baseline. If it does not move that
+number substantially on this corpus, none of the work above is justified.
+
+**Also worth reading regardless**: semble, for how it handles chunking and
+storage for code search.
