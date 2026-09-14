@@ -1172,6 +1172,13 @@ with tempfile.TemporaryDirectory() as hook_tmp:
     finally:
         os.chdir(orig_cwd)
 
+# The temp stores in 10e-10i are created with ignore_cleanup_errors=True.
+# windows-latest intermittently reported the just-used temp vault folder as
+# "used by another process" at cleanup, then passed on rerun with identical
+# code. The holder was not identified (vault init spawns no subprocess;
+# something scanning freshly written files is a common cause on CI runners).
+# Real connection leaks are asserted explicitly by 10i, so tolerating a
+# leftover temp folder here does not hide them.
 # 10e. Every layer must import and work in SCRIPT mode, which is how the
 # lifecycle hooks run (`python3 .../hooks.py session-start`). The script-mode
 # import fallback in episodic_layer and code_layer omitted `open_db`, so
@@ -1180,7 +1187,7 @@ with tempfile.TemporaryDirectory() as hook_tmp:
 # held exactly one session -- written by this test file. Package-mode tests
 # could not see it, because package mode takes the other import branch.
 _repo_root = Path(__file__).resolve().parent.parent
-with tempfile.TemporaryDirectory() as _sm_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _sm_tmp:
     _sm_env = dict(os.environ, AGI_MEMORY_DB=str(Path(_sm_tmp) / "script_mode.db"))
     _probe = (
         "import sys; sys.path.insert(0, 'src/agi_memory')\n"
@@ -1225,7 +1232,7 @@ from agi_memory.layers.session_layer import remove_record_listener as _rm_rec
 from agi_memory.layers.graph_layer import remove_edge_listener as _rm_edge
 from agi_memory.vault import deduplicate_and_compact as _compact
 from agi_memory.layers.code_layer import CodeLayer  # noqa: E402  (not bound at module level before this point)
-with tempfile.TemporaryDirectory() as _cp_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _cp_tmp:
     _cp_db = Path(_cp_tmp) / "compact.db"
     _cp_vault = Path(_cp_tmp) / "vault"
     _cp_prev = {k: os.environ.get(k) for k in ("AGI_MEMORY_DB", "AGI_MEMORY_VAULT")}
@@ -1282,7 +1289,7 @@ with tempfile.TemporaryDirectory() as _cp_tmp:
 # tool call, and must reuse a hook-started session instead of duplicating it.
 # (The reuse check first compared SQLite's UTC start time against the LOCAL
 # date, so it never matched east or west of UTC once the dates diverged.)
-with tempfile.TemporaryDirectory() as _ms_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _ms_tmp:
     _ms_db = Path(_ms_tmp) / "mcp_session.db"
     _ms_env = dict(os.environ, AGI_MEMORY_DB=str(_ms_db), AGI_MEMORY_VAULT=str(Path(_ms_tmp) / "vault"),
                    AGENT_MEMORY_PROJECT="mcp-session")
@@ -1330,7 +1337,7 @@ with tempfile.TemporaryDirectory() as _ms_tmp:
 # observations table empty. Delete and re-insert now share one transaction.
 from agi_memory import vault as _vault_atomic
 from agi_memory import sync as _sync_atomic
-with tempfile.TemporaryDirectory() as _at_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _at_tmp:
     _at_db = Path(_at_tmp) / "atomic.db"
     _at_vault = Path(_at_tmp) / "vault"
     _at_prev = {k: os.environ.get(k) for k in ("AGI_MEMORY_DB", "AGI_MEMORY_VAULT")}
@@ -1379,7 +1386,7 @@ with tempfile.TemporaryDirectory() as _at_tmp:
 # A fresh store's first sync must not compact: it read "never compacted" as
 # "compacted at epoch 0", so every install compacted seconds after its first
 # memory, usually from a background thread.
-with tempfile.TemporaryDirectory() as _fs_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _fs_tmp:
     _fs_vault = Path(_fs_tmp) / "vault"
     _fs_calls = []
     _real_compact = _sync_atomic.deduplicate_and_compact
@@ -1422,7 +1429,7 @@ finally:
 # test's TemporaryDirectory could not delete (WinError 32 on miss.db).
 from agi_memory.layers import session_layer as _sl_leakmod
 from agi_memory.layers.episodic_layer import EpisodicLayer as _EL_leak
-with tempfile.TemporaryDirectory() as _lk_tmp:
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _lk_tmp:
     _lk_db = Path(_lk_tmp) / "not_ready.db"
     _EL_leak(db_path=_lk_db, project="leak-proj").start_session(project="leak-proj")  # file exists, no L1 tables
     _lk_opened = []
