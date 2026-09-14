@@ -293,6 +293,20 @@ def setup_git_remote(
     return True, msg
 
 
+def _sync_commit_description(new_obs: list, new_edges: int, limit: int = 10) -> str:
+    """Build the commit body listing the synced memories. Body only, no footer."""
+    lines = []
+    for o in new_obs[:limit]:
+        title = (o.get("title") or "untitled").strip()
+        typ = (o.get("type") or "").strip()
+        lines.append(f"- {title[:80]} [{typ}]" if typ else f"- {title[:80]}")
+    if len(new_obs) > limit:
+        lines.append(f"- ... and {len(new_obs) - limit} more")
+    if new_edges > 0:
+        lines.append(f"- {new_edges} graph relation(s)")
+    return "\n".join(lines)
+
+
 def _generate_sync_commit_message(v_dir: Path, dedupe_stats: Optional[dict] = None) -> str:
     """Generate an informative, conventional git commit message for the vault."""
     if dedupe_stats and dedupe_stats.get("observations_pruned", 0) > 0:
@@ -328,14 +342,18 @@ def _generate_sync_commit_message(v_dir: Path, dedupe_stats: Optional[dict] = No
                 title = (new_obs[0].get("title") or "update memory").strip()
                 if title.startswith("[") and "]" in title:
                     title = title.split("]", 1)[1].strip()
-                return f"sync{proj_scope}: {title[:70]}"
+                subject = f"sync{proj_scope}: {title[:70]}"
+                body = _sync_commit_description(new_obs, new_edges)
+                return f"{subject}\n\n{body}" if body else subject
 
             parts = []
             if new_obs:
                 parts.append(f"+{len(new_obs)} obs" if len(new_obs) > 1 else "+1 obs")
             if new_edges > 0:
                 parts.append(f"+{new_edges} edges" if new_edges > 1 else "+1 edge")
-            return f"sync{proj_scope}: {', '.join(parts)}"
+            subject = f"sync{proj_scope}: {', '.join(parts)}"
+            body = _sync_commit_description(new_obs, new_edges)
+            return f"{subject}\n\n{body}" if body else subject
     except Exception:
         pass
 
