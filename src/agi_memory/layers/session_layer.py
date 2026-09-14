@@ -347,6 +347,20 @@ class SessionLayer(MemoryLayer):
             # peer layer sharing the file) degrades to "no hits", never a crash.
             return []
 
+    @staticmethod
+    def _fact_entries(facts) -> list:
+        """Facts are stored as a JSON array, but older and imported rows hold a
+        bare string. Both must render, so neither shape is assumed."""
+        if not facts:
+            return []
+        if isinstance(facts, list):
+            return [str(x) for x in facts]
+        try:
+            parsed = json.loads(facts)
+        except (json.JSONDecodeError, TypeError):
+            return [str(facts)]
+        return [str(x) for x in parsed] if isinstance(parsed, list) else [str(parsed)]
+
     def _bodies_by_id(self, ids: list[str]) -> list[Hit]:
         if not ids or not self.db_path.exists():
             return []
@@ -374,12 +388,25 @@ class SessionLayer(MemoryLayer):
             tag = ""
             if typ == "superseded":
                 tag = f"[SUPERSEDED by #{sup_by}] " if sup_by else "[SUPERSEDED] "
+            # `record` writes facts=[text] and narrative=text, so rendering both
+            # emitted every memory twice -- measured at 4,887 chars for a 2,376
+            # char record. Keep the narrative and add only the facts it does not
+            # already contain (imported or hand-written rows can carry extras).
+            body = (n or "").strip()
+            extra = [x for x in self._fact_entries(f)
+                     if x and x not in body and not x.startswith("Rationale:")]
+            if not body:
+                body = " ".join(extra)
+                extra = []
+            if extra:
+                body = f"{body} {' '.join(extra)}"
+
             why_str = f" | Why: {why}" if why else ""
             # A guess an agent wrote and a decision the user confirmed read the
             # same once retrieved, so the two that change how the memory should
             # be treated say so.
             tag += _ORIGIN_TAG.get(origin or "", "")
-            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {f} {n}{why_str}".replace("  ", " "),
+            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {body}{why_str}".replace("  ", " "),
                                 source=self.name, ref=str(i))
         return [by_id[str(i)] for i in ids if str(i) in by_id]
 

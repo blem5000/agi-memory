@@ -883,6 +883,31 @@ with tempfile.TemporaryDirectory() as bitemp_tmp:
     assert gl_bt.remove_alias("gql") is False       # already gone
     assert gl_bt.remove_alias("  ") is False
 
+    # 9a-bis. A recall hit must render its body once. `record` writes
+    # facts=[text] and narrative=text, so concatenating both emitted every
+    # memory twice -- measured at 4,887 characters for a 2,376 character record,
+    # in recall and in the startup context injected into every session.
+    import sqlite3 as _sq3
+    _sl = SessionLayer(db_path=bt_db, project="p-render")
+    _sl.record(text="Queue jobs in Postgres using SKIP LOCKED.", title="Queue",
+               project="p-render", rationale="Redis restarts lost jobs")
+    _h = _sl.search("Postgres SKIP LOCKED", limit=3)[0]
+    assert _h.text.count("SKIP LOCKED") == 1, _h.text
+    assert "Why: Redis restarts lost jobs" in _h.text
+    assert "Rationale:" not in _h.text
+    _con = _sq3.connect(bt_db)
+    _rid = _con.execute("SELECT id FROM observations WHERE project = 'p-render'").fetchone()[0]
+    # Facts carrying something the narrative does not must still render, and a
+    # bare-string facts column (older and imported rows) must not be dropped.
+    _con.execute("UPDATE observations SET facts = ? WHERE id = ?",
+                 (json.dumps(["Queue jobs in Postgres using SKIP LOCKED.", "Extra only in facts"]), _rid))
+    _con.commit()
+    assert "Extra only in facts" in _sl.search("Postgres SKIP LOCKED", limit=3)[0].text
+    _con.execute("UPDATE observations SET facts = ?, narrative = '' WHERE id = ?",
+                 ("A bare string fact", _rid))
+    _con.commit(); _con.close()
+    assert "A bare string fact" in _sl.search("bare string fact", limit=3)[0].text
+
     # 9b. Canonicalization on add_edge
     gl_bt.add_edge("fcm", "USES", "jwt", "FCM uses JWT for authorization", project="p-bt")
     con = gl_bt._get_con(mode="ro")

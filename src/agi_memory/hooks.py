@@ -101,6 +101,20 @@ def ensure_hooks_dir() -> Path:
 # Hook Implementations
 # ============================================================================
 
+# Startup context is injected into every session without anyone asking for it,
+# and a single bootstrapped commit message can run to several thousand
+# characters. Clip the preview; the id is right there and `memory_recall` or
+# `agi-memory inspect <id>` returns the record in full when it is wanted.
+_PREVIEW_CHARS = 400
+
+
+def _clip(text: str, limit: int = _PREVIEW_CHARS) -> str:
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0] + " ... (truncated -- inspect for full text)"
+
+
 def hook_session_start(project: Optional[str] = None) -> None:
     """SessionStart / PreInvocation: Inject pinned blocks, precedents, and episodic recap into context."""
     proj = project or detect_project()
@@ -154,7 +168,7 @@ def hook_session_start(project: Optional[str] = None) -> None:
     if recent_hits:
         output.append("\n## Top Project Precedents")
         for h in recent_hits:
-            output.append(f"- {h}")
+            output.append(f"- {_clip(h)}")
 
     output.append("\n*Query `memory_recall` (epistemic), `memory_timeline` (episodic), or `code_structure` (code graph) for additional context.*")
     output.append(f"<!-- AGENT_MEMORY_STARTUP_CONTEXT_END -->")
