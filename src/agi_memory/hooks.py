@@ -200,7 +200,19 @@ def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> No
     except Exception:
         pass
 
-    if not pinned_blocks and not recent_hits and not episodic_recap:
+    # Freshness probe: instant cached answer, network (if due) in background.
+    # Never blocks session start and never raises.
+    fresh_line = ""
+    try:
+        try:
+            from agi_memory import sync as _sync
+        except ImportError:
+            import sync as _sync
+        fresh_line = _sync.format_freshness_line(_sync.ensure_fresh_background())
+    except Exception:
+        pass
+
+    if not pinned_blocks and not recent_hits and not episodic_recap and not fresh_line:
         return
 
     output: List[str] = []
@@ -224,6 +236,10 @@ def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> No
         output.append("\n## Top Project Precedents")
         for h in recent_hits:
             output.append(f"- {_clip(h)}")
+
+    if fresh_line:
+        output.append("\n## Vault Sync")
+        output.append(f"- {fresh_line}")
 
     output.append("\n*Query `memory_recall` (epistemic), `memory_timeline` (episodic), or `code_structure` (code graph) for additional context.*")
     output.append(f"<!-- AGENT_MEMORY_STARTUP_CONTEXT_END -->")
