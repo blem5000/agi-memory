@@ -2,111 +2,86 @@
 
 [![CI](https://github.com/kdbhalala/agi-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/kdbhalala/agi-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/agi-memory.svg)](https://pypi.org/project/agi-memory/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Dependencies](https://img.shields.io/badge/dependencies-0%20(stdlib)-brightgreen.svg)](pyproject.toml)
-[![Latency](https://img.shields.io/badge/all%204%20layers-%3C1ms-blue.svg)](docs/benchmarks.md)
-[![Evals](https://img.shields.io/badge/L1--L4%20evals-100%25-brightgreen.svg)](docs/testing.md)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-**Your AI coding assistant forgets everything between sessions. This remembers.**
+Coding assistants forget everything when a session ends. agi-memory is a small
+local memory they can all read and write, so you don't have to re-explain your
+project every time you open a new session or switch tools.
 
-Decisions you already made, bugs you already fixed, what happened last session,
-how the codebase fits together — kept in a file on your machine and handed back
-to the assistant next time, so you stop re-explaining your own project.
+## A basic example
 
-Works across **Claude Code**, **Cursor**, **Windsurf**, **OpenAI Codex**, **OpenCode**,
-**Antigravity CLI**, **Aider**, **Goose**, **Cline**, **Roo Code**, **Crush**, **Pi**
-and **Hermes Agent** — one memory, whichever tool you open.
+On Monday you tell Claude Code why webhook retries are capped, and it saves that:
 
-No dependencies, no vector database, no background daemon. ~32MB of RAM,
-sub-millisecond lookups, works offline. Comparable tools install ~500MB of
-machine-learning libraries and take 200–500ms per lookup.
+```
+memory_record(
+  title="Webhook retry limit",
+  text="Payment webhooks retry at most 5 times with exponential backoff. "
+       "Do not raise the limit: the provider bans endpoints that retry more.",
+  rationale="Stripe disables endpoints after repeated failed retries",
+)
+```
 
----
+On Thursday you're in Cursor, in a fresh session, and ask it to make webhooks
+more reliable. Before touching the code it checks memory:
 
-### The Problem in 10 Seconds
+```
+$ agi-memory recall "webhook retries" --project shop
+#1 [shop] Webhook retry limit: Payment webhooks retry at most 5 times with
+exponential backoff. Do not raise the limit: the provider bans endpoints that
+retry more. | Why: Stripe disables endpoints after repeated failed retries
+```
 
-**Without agi-memory:**
-> **You (Tuesday in Claude Code):** *"Don't use `asyncio.gather` here, it corrupts the SQLite write lock."*  
-> **Claude:** *"Understood, using sequential writes."*  
-> *— Next day, fresh session in Cursor —*  
-> **Cursor:** *"Let's optimize performance by running this with `asyncio.gather`!"* 🤦
+So it doesn't "fix" reliability by raising the retry count. That's the whole
+idea: decisions, bugs you already fixed, and what you tried last time stay
+available across sessions and across tools.
 
-**With agi-memory:**
-> *— Next day, fresh session in Cursor —*  
-> **Cursor:** *"Recalled architecture decision [#14752]: using sequential writes to prevent multi-agent SQLite lock contention."* 🎯
+## How it works
 
----
+- Memories are stored in SQLite on your machine, and also written to plain
+  append-only text files you can read, diff, and keep in git.
+- Each assistant talks to it through a local MCP server. It works in Claude
+  Code, Cursor, Windsurf, Codex, OpenCode, Antigravity, Aider, Goose, Cline,
+  Roo Code, Crush, Pi, and Hermes Agent.
+- Nothing leaves your machine unless you point the memory files at a git
+  remote to sync them between computers.
+- It's pure Python with no dependencies: no vector database, no model
+  download, no background service.
 
-### Proven by the Numbers
+Besides notes and decisions, it also keeps a short history of past sessions and
+an index of your code (functions and who calls them), so an assistant can ask
+"what calls this?" before changing it.
 
-- ⚡ **Speed & Footprint**: **<1ms** latency across all 4 layers with **~34MB RAM** and **0 background daemons** (vs. 1.2GB+ for vector RAG).
-- 💰 **96% Context Token Savings**: Injects a compact **~120-token** briefing of recent sessions and active invariants instead of dumping 3,000+ tokens of raw logs every session.
-- 🛡️ **100% Dead-End Avoidance**: Scored **6/6 Actionability and 2/2 Session Recaps** on `tests/eval_usage.py` — warns the agent if previous work was abandoned or blocked so it never repeats failed attempts.
+## What it won't do
 
----
-
-
-## Why agi-memory? The 4 Cognitive Memory Pillars
-
-Most AI memory architectures solve only a fragment of developer memory while incurring heavy dependencies or requiring background Node.js daemons. `agi-memory` unifies all four cognitive memory pillars in pure Python stdlib + SQLite (<35MB RAM, <1ms speed, zero external pip dependencies):
-
-| Pillar | Core Question | Replaces | Implementation in `agi-memory` | Latency / Overhead |
-|---|---|---|---|---|
-| **1. Epistemic** | *"What have we learned?"* | Ad-hoc `.cursorrules`, forgotten bugfixes | `SessionLayer` (SQLite FTS5 + BM25, Core Blocks) | **0.23 ms** (zero tokens) |
-| **2. Semantic** | *"What does our information mean & how is it connected?"* | Heavy GraphRAG, Cognee, ChromaDB | `GraphLayer` (Native SQLite Recursive CTEs) | **0.28 ms** (zero tokens) |
-| **3. Episodic** | *"What happened during previous agent sessions?"* | `claude-mem` (heavy Node/Bun daemons) | `EpisodicLayer` (SQLite Session History & Lifecycle) | **0.23 ms** (zero daemons) |
-| **4. Structural** | *"How is this codebase structurally connected?"* | `Graphify`, Tree-sitter binaries, LSP daemons | `CodeLayer` (stdlib AST + Streaming Regex Graph) | **0.45 ms** (zero daemons) |
-
-Every pillar is scored by its own eval suite — see [Benchmarks](docs/benchmarks.md)
-for measured comparisons against Mem0, Zep, Cognee, LangChain and claude-mem,
-including a real 13,988-observation production dataset.
-
----
+Search is by keyword, not meaning. If you saved "authentication" and later ask
+about "login", it can miss. It helps to use the words you'd search for when
+saving something. The measured hit rates, including the misses, are in
+[Testing & Evals](docs/testing.md).
 
 ## Install
 
 ```bash
-# One-line installer (recommended)
-curl -fsSL https://raw.githubusercontent.com/kdbhalala/agi-memory/main/install.sh | bash
-
-# Or: Homebrew / PyPI
-brew tap kdbhalala/agi-memory https://github.com/kdbhalala/agi-memory && brew install agi-memory
-pipx install agi-memory
+pipx install agi-memory            # or: brew tap kdbhalala/agi-memory https://github.com/kdbhalala/agi-memory && brew install agi-memory
+agi-integrate install all          # connect every assistant it finds on your machine
+agi-integrate status               # see what got connected
 ```
 
-Then wire up your assistants and initialize a project:
-
-```bash
-agi-integrate install all     # configure every detected assistant + lifecycle hooks
-agi-integrate status          # confirm what was detected and configured
-cd your-project && agi-integrate init .
-```
-
-`init` wires the project and installs an `/agi-init` slash command in each
-assistant's own format. Run `/agi-init` inside your assistant and it reads the
-codebase and writes the project's `rules/` and `context/` files.
-
-Full options, including uvx and from-source: [Installation](docs/installation.md).
-
----
+Other install options, including a one-line script and running from source, are
+in [Installation](docs/installation.md).
 
 ## Documentation
 
 | Guide | What's in it |
 |---|---|
-| [Installation](docs/installation.md) | Installer script, Homebrew, PyPI/uvx, from-source, upgrading, hooks setup |
-| [The Four Pillars](docs/pillars.md) | Deep dive into L1 Epistemic, L2 Semantic, L3 Episodic, L4 Code Graph |
-| [Architecture](docs/architecture.md) | Layer boundaries, storage model, multi-assistant production layout |
-| [Supported Assistants](docs/assistants.md) | Per-tool config paths and rules files for all 13 assistants |
-| [CLI Usage](docs/cli.md) | Every `agi-memory` and `agi-integrate` subcommand |
-| [Python API](docs/python-api.md) | Using the layers directly from Python |
-| [Vault & Git Sync](docs/sync.md) | Append-only JSONL vault, cross-device sync, compaction |
-| [Benchmarks](docs/benchmarks.md) | Latency, memory and cost comparisons; real-dataset results |
-| [Testing & Evals](docs/testing.md) | The L1-L4 eval suites, the actionability eval, chaos and stress tests |
-| [Integrations](INTEGRATIONS.md) | Manual per-tool configuration snippets |
-
----
+| [Installation](docs/installation.md) | Install options, upgrading, lifecycle hooks |
+| [CLI Usage](docs/cli.md) | Every `agi-memory` and `agi-integrate` command |
+| [Supported Assistants](docs/assistants.md) | Where each assistant's config lives, and the 16 MCP tools |
+| [How memory is organised](docs/pillars.md) | Notes, knowledge graph, session history, code index |
+| [Architecture](docs/architecture.md) | How the pieces fit together |
+| [Vault & Git Sync](docs/sync.md) | The memory files, syncing between machines, compaction |
+| [Python API](docs/python-api.md) | Using it directly from Python |
+| [Testing & Evals](docs/testing.md) | How it's tested, and where it falls short |
+| [Benchmarks](docs/benchmarks.md) | Speed and memory measurements |
+| [Integrations](INTEGRATIONS.md) | Manual setup snippets for each assistant |
 
 ## License
 
