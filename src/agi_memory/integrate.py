@@ -1020,6 +1020,9 @@ def cmd_install(args: argparse.Namespace) -> None:
             elif tool.name in ("agy", "antigravity"):
                 ok, msg = hooks.install_agy_hooks(scope=scope, py_path=py_path)
                 print(f"  [{'✓' if ok else '!'}] Antigravity hooks: {msg}")
+            elif tool.name == "opencode":
+                ok, msg = hooks.install_opencode_plugin(scope=scope, py_path=py_path)
+                print(f"  [{'✓' if ok else '!'}] OpenCode plugin: {msg}")
         git_res = hooks.install_git_hooks(py_path=py_path)
         if git_res[0]:
             print(f"  [✓] Git hooks: {git_res[1]}")
@@ -1582,10 +1585,12 @@ def cmd_hooks(args: argparse.Namespace) -> None:
                 ok, msg = hooks.uninstall_claude_hooks(scope=scope) if uninstall else hooks.install_claude_hooks(scope=scope, py_path=py_path)
             elif t in ("agy", "antigravity"):
                 ok, msg = hooks.uninstall_agy_hooks(scope=scope) if uninstall else hooks.install_agy_hooks(scope=scope, py_path=py_path)
+            elif t == "opencode":
+                ok, msg = hooks.uninstall_opencode_plugin(scope=scope) if uninstall else hooks.install_opencode_plugin(scope=scope, py_path=py_path)
             elif t == "git":
                 ok, msg = hooks.uninstall_git_hooks() if uninstall else hooks.install_git_hooks(py_path=py_path)
             else:
-                ok, msg = False, f"Unsupported hook tool: {t}. Supported: claude, agy, git, all"
+                ok, msg = False, f"Unsupported hook tool: {t}. Supported: claude, agy, opencode, git, all"
             icon = "✓" if ok else "✗"
             print(f"[{icon}] {t:12}: {msg}")
     print()
