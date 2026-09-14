@@ -629,6 +629,30 @@ def fold_identifier(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
 
+def _dedupe_paths(rows: list) -> list:
+    """Collapse rows that describe the same edge reached by different routes.
+
+    Both traversals select DISTINCT including `path`, which defeats the DISTINCT
+    entirely: one relationship reached three ways is three rows whose only
+    difference is the chain string. Measured on this repository,
+    `dependencies("sync")` returned 20,798 rows of which 5,160 were distinct --
+    75% duplicates, and 3.4MB of output from a single call, which is the whole
+    context budget of the agent that asked. Rows arrive ordered by depth, so the
+    first occurrence kept is also the shortest chain to that edge.
+    """
+    seen = set()
+    out = []
+    for r in rows:
+        # (symbol/source, relation, target, file_path, line_number) -- everything
+        # except depth and path, which are what differ between duplicates.
+        key = (r[0], r[1], r[2], r[3], r[4])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 class CodeLayer(MemoryLayer):
     """Native SQLite Structural Code Graph layer."""
     name = "code"
@@ -1052,7 +1076,7 @@ class CodeLayer(MemoryLayer):
         args.append(max_depth)
 
         cur.execute(query, args)
-        rows = cur.fetchall()
+        rows = _dedupe_paths(cur.fetchall())
         if not rows:
             # Fallback: the caller may have spelled the symbol in another
             # language's convention (getUserById vs get_user_by_id).
@@ -1067,7 +1091,7 @@ class CodeLayer(MemoryLayer):
                     folded_args[i] = f"%{fold_identifier(symbol_name)}"
             try:
                 cur.execute(folded_query, folded_args)
-                rows = cur.fetchall()
+                rows = _dedupe_paths(cur.fetchall())
             except sqlite3.Error:
                 rows = []
         con.close()
@@ -1129,7 +1153,7 @@ class CodeLayer(MemoryLayer):
         args.append(max_depth)
 
         cur.execute(query, args)
-        rows = cur.fetchall()
+        rows = _dedupe_paths(cur.fetchall())
         con.close()
 
         results = []
@@ -1240,16 +1264,39 @@ class CodeLayer(MemoryLayer):
             lines.append("")
         return "\n".join(lines).strip()
 
+    # A transitive traversal from a hub symbol is genuinely enormous: before
+    # this cap, `dependencies sync` on this repository rendered 3.4MB, which is
+    # the entire context budget of the agent that asked for it, spent on one
+    # call. Rows are ordered by depth, so the ones kept are the direct
+    # relationships -- the part anybody actually reads -- and the tail is
+    # summarised rather than dropped silently.
+    _RENDER_LIMIT = 40
+
+    @classmethod
+    def _render_tail(cls, rows: list, shown: int, what: str) -> list:
+        if len(rows) <= shown:
+            return []
+        rest = rows[shown:]
+        by_depth: Dict[Any, int] = {}
+        for r in rest:
+            by_depth[r.get("depth")] = by_depth.get(r.get("depth"), 0) + 1
+        spread = ", ".join(f"{n} at depth {d}" for d, n in sorted(by_depth.items(), key=lambda kv: (kv[0] is None, kv[0])))
+        return [f"", f"_...and {len(rest)} further {what} ({spread}). "
+                     f"Narrow with `--depth 1` or `--project` to see them._"]
+
     @staticmethod
     def format_callers(callers: List[Dict[str, Any]], symbol: str) -> str:
         """Format callers query results."""
         if not callers:
             return f"No inbound callers or references found for `{symbol}`."
 
-        lines = [f"### Callers & Inbound References for `{symbol}` ({len(callers)} found)"]
-        for c in callers:
+        limit = CodeLayer._RENDER_LIMIT
+        lines = [f"### Callers & Inbound References for `{symbol}` ({len(callers)} found"
+                 + (f", showing first {limit} by depth)" if len(callers) > limit else ")")]
+        for c in callers[:limit]:
             lines.append(f"- **{c['caller']}** [{c['relation']}] (L{c['line_number']} in `{c['file_path']}`) [depth {c['depth']}]")
             lines.append(f"  *Chain*: {c['call_chain']}")
+        lines += CodeLayer._render_tail(callers, limit, "callers")
         return "\n".join(lines)
 
     @staticmethod
@@ -1258,10 +1305,13 @@ class CodeLayer(MemoryLayer):
         if not deps:
             return f"No outbound dependencies or calls found for `{symbol}`."
 
-        lines = [f"### Outbound Dependencies & Calls for `{symbol}` ({len(deps)} found)"]
-        for d in deps:
+        limit = CodeLayer._RENDER_LIMIT
+        lines = [f"### Outbound Dependencies & Calls for `{symbol}` ({len(deps)} found"
+                 + (f", showing first {limit} by depth)" if len(deps) > limit else ")")]
+        for d in deps[:limit]:
             lines.append(f"- **{d['target']}** [{d['relation']}] (L{d['line_number']} in `{d['file_path']}`) [depth {d['depth']}]")
             lines.append(f"  *Chain*: {d['dependency_chain']}")
+        lines += CodeLayer._render_tail(deps, limit, "dependencies")
         return "\n".join(lines)
 
     @staticmethod

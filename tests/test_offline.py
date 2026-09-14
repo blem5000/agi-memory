@@ -677,6 +677,13 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert sync_res["status"] == "synced"
     assert sync_res["pushed"] is True
 
+    # Verify semantic commit message generation
+    comp_msg = sync._generate_sync_commit_message(v_dir, dedupe_stats={"observations_pruned": 5})
+    assert "chore: compact vault (5 pruned)" in comp_msg
+    default_msg = sync._generate_sync_commit_message(v_dir, dedupe_stats=None)
+    assert isinstance(default_msg, str) and default_msg.startswith(("sync", "chore"))
+
+
 # 7. Test In-Flight Knowledge Graph Synthesis & Conflict Steering
 with tempfile.TemporaryDirectory() as inflight_tmp:
     if_dir = Path(inflight_tmp)
@@ -1366,6 +1373,14 @@ with tempfile.TemporaryDirectory() as boot_tmp:
                                {"outcome": "great", "session_id": sid,
                                 "project": "sample-agent-app"})
     assert bad.startswith("Error:"), bad
+
+    # Test format_briefing with multi-session timeline
+    briefing = EpisodicLayer.format_briefing([ep.get_session(sid), abandoned])
+    assert "Last Session" in briefing
+    assert "Prior Session" in briefing
+    assert "Do not resume without asking" in briefing
+    assert EpisodicLayer.format_briefing([]) == ""
+
 
     # 4c. Supersession must survive the machine boundary. `superseded_by` holds a
     # row id, which is local, so a second machine importing the same memories

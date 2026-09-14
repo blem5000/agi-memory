@@ -123,6 +123,7 @@ def hook_session_start(project: Optional[str] = None) -> None:
     pinned_blocks: List[Dict[str, Any]] = []
     recent_hits: List[str] = []
     episodic_recap: str = ""
+    session_count: int = 0
 
     try:
         try:
@@ -138,9 +139,10 @@ def hook_session_start(project: Optional[str] = None) -> None:
         recent_hits = [h.text for h in hits]
 
         ep = EpisodicLayer(project=proj)
-        last_session = ep.get_last_session(project=proj)
-        if last_session:
-            episodic_recap = EpisodicLayer.format_recap(last_session)
+        recent_sessions = ep.get_timeline(project=proj, limit=3)
+        if recent_sessions:
+            session_count = len(recent_sessions)
+            episodic_recap = EpisodicLayer.format_briefing(recent_sessions)
         # Register new active session
         ep.start_session(project=proj)
     except Exception:
@@ -154,8 +156,9 @@ def hook_session_start(project: Optional[str] = None) -> None:
     output.append(f"# Agent Memory: Active Context & Precedents ({proj})")
 
     if episodic_recap:
-        output.append("\n## Prior Session Briefing")
-        output.append(f"- {episodic_recap}")
+        header = "## Prior Session Briefing" if session_count == 1 else f"## Recent Sessions (Last {session_count})"
+        output.append(f"\n{header}")
+        output.append(episodic_recap)
 
     if pinned_blocks:
         output.append("\n## Pinned Core Memory (Active Invariants)")

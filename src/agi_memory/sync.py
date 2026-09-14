@@ -293,6 +293,55 @@ def setup_git_remote(
     return True, msg
 
 
+def _generate_sync_commit_message(v_dir: Path, dedupe_stats: Optional[dict] = None) -> str:
+    """Generate an informative, conventional git commit message for the vault."""
+    if dedupe_stats and dedupe_stats.get("observations_pruned", 0) > 0:
+        return f"chore: compact vault ({dedupe_stats['observations_pruned']} pruned) [auto]"
+
+    try:
+        new_obs = []
+        rc_d, diff_obs, _ = _run_git(["diff", "--cached", "--unified=0", "observations.jsonl"], cwd=v_dir)
+        if rc_d == 0 and diff_obs:
+            for line in diff_obs.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    raw = line[1:].strip()
+                    if raw.startswith("{") and raw.endswith("}"):
+                        try:
+                            item = json.loads(raw)
+                            if not item.get("_tombstone"):
+                                new_obs.append(item)
+                        except Exception:
+                            pass
+
+        new_edges = 0
+        rc_g, diff_graph, _ = _run_git(["diff", "--cached", "--unified=0", "graph.jsonl"], cwd=v_dir)
+        if rc_g == 0 and diff_graph:
+            for line in diff_graph.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    new_edges += 1
+
+        if new_obs or new_edges > 0:
+            projects = sorted(list({o.get("project") for o in new_obs if o.get("project")}))
+            proj_scope = f"({projects[0]})" if len(projects) == 1 else (f"({', '.join(projects[:2])})" if projects else "")
+
+            if len(new_obs) == 1 and new_edges == 0:
+                title = (new_obs[0].get("title") or "update memory").strip()
+                if title.startswith("[") and "]" in title:
+                    title = title.split("]", 1)[1].strip()
+                return f"sync{proj_scope}: {title[:70]}"
+
+            parts = []
+            if new_obs:
+                parts.append(f"+{len(new_obs)} obs" if len(new_obs) > 1 else "+1 obs")
+            if new_edges > 0:
+                parts.append(f"+{new_edges} edges" if new_edges > 1 else "+1 edge")
+            return f"sync{proj_scope}: {', '.join(parts)}"
+    except Exception:
+        pass
+
+    return "sync: update agent memory vault [auto]"
+
+
 def sync(
     vault_dir: Path | str | None = None,
     push: bool = True,
@@ -333,9 +382,7 @@ def sync(
 
         committed = False
         if status_out:
-            c_msg = "sync: update agent memory vault [auto]"
-            if dedupe_stats and dedupe_stats.get("observations_pruned", 0) > 0:
-                c_msg = f"chore: compact vault ({dedupe_stats['observations_pruned']} pruned) [auto]"
+            c_msg = _generate_sync_commit_message(v_dir, dedupe_stats=dedupe_stats)
             rc, _, _ = _run_git(["commit", "-m", c_msg], cwd=v_dir)
             committed = (rc == 0)
 

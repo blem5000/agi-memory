@@ -666,3 +666,30 @@ class EpisodicLayer(MemoryLayer):
         if outcome in NOT_RESUMABLE:
             line += f"\n- {_RESUME_WARNING[outcome]}"
         return line
+
+    @staticmethod
+    def format_briefing(sessions: List[Dict[str, Any]]) -> str:
+        """Format recent sessions into a compact multi-session briefing for session-start."""
+        if not sessions:
+            return ""
+
+        lines = []
+        for idx, s in enumerate(sessions):
+            sid = s.get("session_id", "previous")
+            goal = s.get("goal") or "General development"
+            summary = s.get("summary") or "Work in progress"
+            touched = s.get("touched_files") or []
+            tf_str = f" ({len(touched)} files touched: {', '.join(touched[:3])}{'...' if len(touched) > 3 else ''})" if touched else ""
+            commits = s.get("commits") or []
+            cm_str = f" [Commit: {', '.join(commits[:2])}]" if commits else ""
+
+            dur_s = s.get("duration_seconds") or 0.0
+            dur_str = f", {dur_s:.0f}s" if (0 < dur_s < 60) else (f", {dur_s/60:.1f}m" if dur_s >= 60 else "")
+
+            outcome = (s.get("outcome") or "unknown").lower()
+            label = "Last Session" if idx == 0 else "Prior Session"
+            lines.append(f"- **{label} (`{sid}`, {outcome}{dur_str})**: {goal} -> {summary}{tf_str}{cm_str}")
+            if outcome in NOT_RESUMABLE:
+                lines.append(f"  - {_RESUME_WARNING[outcome]}")
+        return "\n".join(lines)
+
