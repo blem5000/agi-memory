@@ -468,7 +468,12 @@ def main():
     sub = parser.add_subparsers(dest="subcommand")
 
     sub.add_parser("status", help="Show synchronization and vault status")
-    sub.add_parser("sync", help="Trigger immediate bidirectional sync")
+    # `now` is the documented spelling and the only one the CLI dispatcher lets
+    # through; this parser only ever accepted "sync", so `agi-memory sync now`
+    # passed the dispatcher and then died in argparse. `sync` stays as an alias
+    # because `python -m agi_memory.sync sync` is a documented direct invocation.
+    sub.add_parser("now", help="Trigger immediate bidirectional sync")
+    sub.add_parser("sync", help=argparse.SUPPRESS)
     sub.add_parser("dedupe", help="Force immediate deduplication and compaction")
 
     init_p = sub.add_parser("init", help="Initialize Git sync with remote")
@@ -490,7 +495,7 @@ def main():
             t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["last_sync_epoch"]))
             print(f"  Last Synced:  {t_str}")
         print(f"  GitHub CLI:   {'✓ Authenticated (' + st['gh_username'] + ')' if st['gh_authenticated'] else ('Installed (Not logged in)' if st['gh_available'] else 'Not Installed')}\n")
-    elif args.subcommand == "sync":
+    elif args.subcommand in ("now", "sync"):
         print("Synchronizing agent-memory vault...")
         res = sync(push=True, pull=True)
         print(f"Status: {res['status']}")
