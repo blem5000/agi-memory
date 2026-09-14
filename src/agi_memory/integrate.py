@@ -1045,7 +1045,11 @@ def setup_sync_interactive(non_interactive: bool = False, auto_gh: bool = False)
         import vault
 
     v_dir = vault.init_vault()
-    vault.bootstrap_from_existing_claudemem()
+    # Removed with the legacy claude-mem worker (refactor f515529) while this
+    # call site survived; guard so `install` without --skip-sync keeps working.
+    _bootstrap = getattr(vault, "bootstrap_from_existing_claudemem", None)
+    if callable(_bootstrap):
+        _bootstrap()
 
     cfg = sync.load_sync_config()
     if cfg.get("remote_url"):
