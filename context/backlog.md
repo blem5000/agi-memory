@@ -6,6 +6,24 @@ future session can act without re-deriving it.
 
 Last reviewed: 2026-09-14 (post-0.6.0 backlog sweep).
 
+## Standing gates — why the four open items are not being worked
+
+Nothing below is open for lack of time. Each is blocked on something that must
+happen outside the code, and picking any of them up before its gate is met
+would mean building on a guess. Stated here so a future session stops
+re-deriving it.
+
+| Item | Gate | Who or what clears it |
+| :--- | :--- | :--- |
+| 7. Distribution | Nobody outside the author has used this. Every priority question after it is guesswork. | The maintainer posting it. Not a code task. |
+| 14. Static embeddings | Its own entry says measure first: embed the vault with potion, run the synonym category, compare with the 6% baseline. That measurement needs a downloaded model, so it cannot run inside this dependency-free test suite. | A one-off out-of-tree experiment. If the number does not move, the whole item dies. |
+| 15. Usage failure, remaining half | Measuring whether a model *used* a memory correctly needs a model in the loop — a network call and a dependency. `eval_usage.py` measures the deterministic floor and says so. | A separate opt-in harness, or accepting the proxy. |
+| 11. Contextual applicability | Recording what a decision depended on, so something can flag when those conditions stop holding. A modelling problem, and no cheap storage change closes it — a constraints field would return as more indistinguishable prose, which is the failure it is meant to fix. | A real design, prompted by a real case. |
+
+Items 14 and 11 both wait on evidence item 7 would produce. That ordering is
+the point: distribution is not a nice-to-have at the end of the list, it is
+what makes the rest of the list decidable.
+
 ---
 
 ## 1. Vault git-sync silently diverges on concurrent machines — FIXED (verified 2026-09-14)
@@ -206,7 +224,7 @@ sessions. This remembers — in 32MB, with no dependencies."
 
 ---
 
-## 7. Distribution: it has never been posted — OPEN
+## 7. Distribution: it has never been posted — OPEN (gated: maintainer, not a code task)
 
 0 stars, 0 forks, no external users, no issues, 5 PyPI releases. That is not a
 demand signal; nothing has been posted anywhere a user would find it. Every
@@ -515,7 +533,7 @@ gate, but the specific defect that caused the data loss is gone and tested.
 
 ---
 
-## 14. Static embeddings could close the synonym gap without the 500MB — OPEN
+## 14. Static embeddings could close the synonym gap without the 500MB — OPEN (gated: measure first, out of tree)
 
 Raised by a commenter pointing at [Model2Vec / potion](https://huggingface.co/collections/minishlab/potion)
 and the [semble](https://github.com/MinishLab/semble) code-search MCP built on it.
