@@ -488,6 +488,11 @@ with tempfile.TemporaryDirectory() as tmp_dir:
         assert "\\" not in _row["file_path"], f"non-posix path stored: {_row['file_path']}"
     assert _cl.get_structure("pkg/mod.py", project="pathproj"), "posix path lookup failed"
     assert _cl.get_structure("pkg\\mod.py", project="pathproj"), "windows path lookup failed"
+    # Paths are stored relative to the indexed directory, so a path given from
+    # a parent (the repo root, where an agent usually stands) must still resolve,
+    # and a file that genuinely is not there must still miss.
+    assert _cl.get_structure("repo/pkg/mod.py", project="pathproj"), "parent-rooted path lookup failed"
+    assert not _cl.get_structure("repo/pkg/absent.py", project="pathproj"), "suffix fallback matched a missing file"
 
 # the code parser must survive input no version of ast agrees on:
 # NUL bytes are a ValueError on 3.10 and a SyntaxError from 3.12 on

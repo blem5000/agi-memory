@@ -998,35 +998,46 @@ class CodeLayer(MemoryLayer):
             sql += " ORDER BY file_path, start_line"
             cur.execute(sql, args)
         else:
-            pattern = f"%{target_str}%"
             sql = """
                 SELECT file_path, name, qualified_name, kind, signature, start_line, end_line, parent_symbol
                 FROM code_symbols
                 WHERE file_path LIKE ?
             """
-            args = [pattern]
             if proj:
                 sql += " AND project = ?"
-                args.append(proj)
             sql += " ORDER BY file_path, start_line"
-            cur.execute(sql, args)
+            # Paths are stored relative to the directory that was indexed, so
+            # indexing `src/` records `agi_memory/sync.py` -- and the
+            # repo-relative `src/agi_memory/sync.py` an agent naturally passes
+            # matched nothing. Drop leading components until something matches;
+            # the full path is still tried first, so an exact hit always wins.
+            parts = [x for x in target_str.split("/") if x not in ("", ".")]
+            rows = []
+            for i in range(len(parts)):
+                args = [f"%{'/'.join(parts[i:])}%"] + ([proj] if proj else [])
+                cur.execute(sql, args)
+                rows = cur.fetchall()
+                if rows:
+                    break
+            con.close()
+            return self._structure_rows(rows)
 
         rows = cur.fetchall()
         con.close()
+        return self._structure_rows(rows)
 
-        results = []
-        for r in rows:
-            results.append({
-                "file_path": r[0],
-                "name": r[1],
-                "qualified_name": r[2],
-                "kind": r[3],
-                "signature": r[4] or "",
-                "start_line": r[5],
-                "end_line": r[6],
-                "parent_symbol": r[7]
-            })
-        return results
+    @staticmethod
+    def _structure_rows(rows: list) -> List[Dict[str, Any]]:
+        return [{
+            "file_path": r[0],
+            "name": r[1],
+            "qualified_name": r[2],
+            "kind": r[3],
+            "signature": r[4] or "",
+            "start_line": r[5],
+            "end_line": r[6],
+            "parent_symbol": r[7],
+        } for r in rows]
 
     def get_callers(self, symbol_name: str, project: Optional[str] = None, max_depth: int = 3) -> List[Dict[str, Any]]:
         """Recursive CTE: Find all inbound callers and dependents of a symbol (<0.5ms)."""
