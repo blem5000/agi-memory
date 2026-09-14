@@ -18,11 +18,20 @@ re-deriving it.
 | 7. Distribution | ~~Nobody outside the author has used this~~ — **posted to Reddit 2026-09-14**. Now waiting on the first issue, question or install report from a stranger, which is the evidence item 11 needs. | Done; watching. |
 | 14. Static embeddings | ~~Measure first~~ — **measured 2026-09-14 and closed**. Paraphrase recall went 0/18 to 1/6 with 500 real distractors, for 89 MB of Rust and C dependencies plus a 307 MB model cache. The number did not move; the item died, as its own gate said it would. | Done. |
 | 15. Usage failure, remaining half | Measuring whether a model *used* a memory correctly needs a model in the loop — a network call and a dependency. `eval_usage.py` measures the deterministic floor and says so. | A separate opt-in harness, or accepting the proxy. |
-| 11. Contextual applicability | Recording what a decision depended on, so something can flag when those conditions stop holding. A modelling problem, and no cheap storage change closes it — a constraints field would return as more indistinguishable prose, which is the failure it is meant to fix. | A real design, prompted by a real case. |
+| 11. Contextual applicability | **Reframed 2026-09-14**: not a modelling problem. In a real 14,748-record vault the rationale field has been used zero times by real work and supersession three times, and only 5.3% of records pass through the tool that could ask. The gap is adoption, and the advisory notice this project already ships converts at ~0%. | Measure on one assistant whether a required field produces reasoning or filler. Not gated on item 7 any more. |
 
-Item 11 waits on evidence item 7 would produce — and item 7 has now been posted,
-so that evidence is in flight rather than hypothetical. (Item 14 no longer waits
-on anything: its measurement was run on 2026-09-14 and closed it.) That ordering is
+Item 11 no longer waits on item 7. Profiling a real vault on 2026-09-14
+answered its question directly: the fields it wants to improve are not being
+written at all, so the work is adoption rather than modelling. Item 14 was
+measured the same day and closed. What item 7 still buys is item 15 — whether a
+model *uses* a memory correctly is not answerable from one person's store.
+
+The pattern across items 4, 11, 14 and 16 is worth stating once: **every time a
+number was put on one of these, the answer changed.** The alias table was a
+paper close at 0.1% coverage; static embeddings looked promising at 4/6 and were
+chance; the rationale field looked shipped and has never been used. Measure
+before building is not a slogan in this file, it is the only thing that has
+worked. That ordering is
 the point: distribution is not a nice-to-have at the end of the list, it is
 what makes the rest of the list decidable.
 
@@ -470,12 +479,55 @@ both columns now travel. Covered by a test that exports from one database,
 imports into another, and asserts the chain and the rationale both survive;
 verified to fail when the re-link is removed.
 
-**Still open, and it is the harder half**: a stored rationale still returns as
-prose in a retrieved block. Nothing marks it as "argued for under constraints
-that may no longer hold", and nothing records what those constraints were, so a
-wrong decision with good reasoning attached still reads as settled. Confidence
-and constraint capture remain unbuilt. This is a presentation and modelling
-problem, not a storage one, and no cheap fix closes it.
+**REFRAMED 2026-09-14 on evidence from a real 14,748-record vault.** The
+remaining half was written up as a presentation and modelling problem. It is
+not. It is an adoption problem, and the numbers are not close:
+
+| | count | share |
+| :--- | ---: | ---: |
+| observations total | 14,748 | |
+| written through `memory_record` (the only path that accepts a rationale) | 785 | **5.3%** |
+| carrying a rationale | 6 | 0.04% |
+| ...of those, written by a test rather than by real work | 6 | **all of them** |
+| superseded records | 3 | 0.02% |
+
+So in real use the rationale field has been used **zero** times, and
+supersession three times in fourteen thousand. Nothing marks a decision as
+conditional because nothing marks decisions at all. Improving how a rationale
+*renders* optimises a path that carries no traffic.
+
+Two further things that number exposes:
+
+- **94.7% of the corpus never passes through the tool that could ask for any of
+  this.** Those records arrived by import and bulk paths, and they are mostly
+  `discovery` (46% of the whole store), not decisions. A model built around
+  decisions and their supersession is being applied to a store that is largely
+  observations.
+- **The steering mechanism this project already ships converts at roughly
+  zero.** `memory_record` returns a `[Notice - Potential Overlap Found]` when a
+  new memory collides with an existing one, explicitly so the agent can resolve
+  it with `supersedes`. Three superseded records in 14,748 is the outcome of
+  that notice. Proposing a second advisory notice — "you did not give a
+  rationale" — would be building the same thing that measurably does not work.
+
+**What is actually left**, in order of honesty rather than appeal:
+
+1. **Make it structural, not advisory.** A `rationale` that is `required` in
+   the tool schema when `category` is `decision` is the only intervention here
+   that does not depend on an agent choosing to be diligent. It is also a
+   breaking change to the tool contract, and it will produce filler rationales
+   from agents that have nothing to say. Worth measuring on one assistant
+   before it ships to thirteen.
+2. **Say so.** If the field stays optional and unused, the README and docs
+   should not imply that decisions carry their reasoning. Same correction as
+   item 4's alias table: the mechanism exists, the data behind it does not.
+3. **Question the model.** If 46% of what people store is `discovery`, the
+   valuable distinction may not be "which decision replaced which" at all.
+   That is worth knowing before more is built on the decision model.
+
+Do not start (1) without the measurement in (3). The old framing — confidence
+and constraint capture — stays parked; it is a refinement of a mechanism that
+has not yet been used once.
 
 **Correction to make if this thread continues**: I told the commenter
 supersession was not surfaced. It partly is — the `[SUPERSEDED]` marker exists.
@@ -729,6 +781,19 @@ guessed this while exploring", which is the distinction that actually bites.
 **Do not** build a general trust framework off the back of a comment. Measure
 first whether misranked-but-relevant memories are actually causing bad agent
 behaviour — item 15's eval would be the instrument for that.
+
+**Reframed 2026-09-14, same evidence as item 11.** `origin` ships, and it will
+be filled about as often as `rationale` is — which is never — unless something
+other than a tool description asks for it. The one difference worth protecting:
+`bootstrap.py` sets `origin="bootstrapped"` itself, with no agent involved, and
+that is 61 of the 81 origins now in the vault. **The origins that get set are
+the ones a code path sets, not the ones a model is asked to set.**
+
+That is the design rule to carry forward for the rest of this item. Authority is
+worth recording only where a code path can determine it without cooperation:
+bootstrap output, vault imports, and `memory_pin` (a pinned block is
+user-curated by construction). An `origin` an agent must volunteer honestly is
+the same bet as `rationale`, and that bet has already lost 785 times.
 
 **Done (2026-09-14): the cheapest step above, and only that.** `observations.origin`
 (migrated in place) holds `user-confirmed`, `agent-inferred` or `bootstrapped`,
