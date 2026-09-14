@@ -24,6 +24,20 @@ machine-learning libraries and take 200–500ms per lookup.
 
 ---
 
+### The Problem in 10 Seconds
+
+**Without agi-memory:**
+> **You (Tuesday in Claude Code):** *"Don't use `asyncio.gather` here, it corrupts the SQLite write lock."*  
+> **Claude:** *"Understood, using sequential writes."*  
+> *— Next day, fresh session in Cursor —*  
+> **Cursor:** *"Let's optimize performance by running this with `asyncio.gather`!"* 🤦
+
+**With agi-memory:**
+> *— Next day, fresh session in Cursor —*  
+> **Cursor:** *"Recalled architecture decision [#14752]: using sequential writes to prevent multi-agent SQLite lock contention."* 🎯
+
+---
+
 ## Why agi-memory? The 4 Cognitive Memory Pillars
 
 Most AI memory architectures solve only a fragment of developer memory while incurring heavy dependencies or requiring background Node.js daemons. `agi-memory` unifies all four cognitive memory pillars in pure Python stdlib + SQLite (<35MB RAM, <1ms speed, zero external pip dependencies):
