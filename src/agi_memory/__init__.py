@@ -1,5 +1,5 @@
 """agi-memory: Turnkey zero-dependency four-pillar cognitive memory framework for AI coding assistants."""
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from .layers.session_layer import SessionLayer
 from .layers.graph_layer import GraphLayer
