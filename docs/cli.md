@@ -73,4 +73,17 @@ agi-memory promote --dry-run --project my-app
 agi-memory promote --project my-app --limit 20
 ```
 
+### Removing Credentials
+Memories are redacted as they are recorded or imported: known key formats (AWS, GitHub,
+OpenAI/Anthropic `sk-`, Stripe, Slack, Google `AIza`, JWTs, private keys), passwords in
+URLs, and `password = value` style assignments whose value looks like a credential. A
+secret written as prose is not recognised. To clean memories stored before redaction
+existed, or to remove a literal you know:
+```bash
+agi-memory redact                        # apply the patterns to every stored memory
+agi-memory redact --values secrets.txt   # also remove these literals, one per line (8+ chars)
+```
+This rewrites the local database and `observations.jsonl` without dropping or duplicating
+records. The vault's git history still holds the old text, so rotate the credential.
+
 ---

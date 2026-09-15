@@ -142,6 +142,7 @@ Use `--scope user` to install the command globally instead of per-project.
 
 Agent memory automatically triggers lifecycle hooks during coding assistant workflows:
 1. **`session-start` / `PreInvocation`**: Proactively fetches pinned Core Memory blocks and top project precedents, injecting them directly into the assistant's starting context prompt.
+   **`user-prompt-submit`** (Claude Code, OpenCode): adds up to 3 memories that closely match the prompt you just sent.
 2. **`pre-compact`**: Scans unpromoted high-signal working memories and clusters them into L2 knowledge graph triples right before context window compaction.
 3. **`session-end` / `Stop`**: Instantly commits vault changes and triggers a background Git push to your private remote.
 4. **`pre-commit`**: Validates offline test suites and memory invariants before code is committed.
@@ -301,8 +302,10 @@ agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/a
 agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agent-memory.js
 ```
 The generated zero-dependency plugin shells out to the hooks CLI: session-start
-via `experimental.chat.system.transform`, pre-compact via
-`experimental.session.compacting`, session-end on `session.idle`.
+via `experimental.chat.system.transform`, user-prompt-submit by reading the
+typed text in `chat.message` and adding the matches through the same system
+transform, pre-compact via `experimental.session.compacting`, session-end on
+`session.idle`.
 
 ---
 

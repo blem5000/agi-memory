@@ -180,6 +180,72 @@ def hook_session_start(project: Optional[str] = None) -> None:
     print("\n".join(output))
 
 
+_PROMPT_RECALL_LIMIT = 3
+# Conversational words that match thousands of memories and mean nothing here:
+# "can you explain how this works" pulled in two unrelated commits without this.
+_PROMPT_FILLER = frozenset(
+    "explain works work this that what make does help please want need like thing things "
+    "code file files just able could would should tell show look check about into with from "
+    "have your there here them they then than when".split())
+
+
+def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[Path] = None) -> str:
+    """Memories that match a user's prompt closely enough to show unasked.
+
+    Agents almost never call memory_recall themselves: 0 calls in the 146
+    Claude Code sessions that had the tool, which is deferred there and so
+    costs a lookup before it can even be called. Hook-capable assistants get
+    the matches pushed when the prompt arrives instead. The search ORs terms,
+    so on a large store nearly any prompt matches something; a hit is shown
+    only when it shares several of the prompt's words.
+    """
+    try:
+        from agi_memory.layers.session_layer import SessionLayer, STOPWORDS
+    except ImportError:
+        from layers.session_layer import SessionLayer, STOPWORDS
+    text = prompt or ""
+    # ponytail: 5-char prefixes stand in for stemming; FTS already stems the search itself.
+    terms = {t[:5] for t in re.findall(r"[a-z0-9]+", text.lower())
+             if len(t) > 3 and t not in STOPWORDS and t not in _PROMPT_FILLER}
+    if len(terms) < 2 or text.lstrip().startswith("/"):
+        return ""
+    need = min(4, max(2, -(-len(terms) // 4)))
+    proj = project or detect_project()
+    try:
+        hits = SessionLayer(db_path=db_path, project=proj).search(text, limit=10)
+    except Exception:
+        return ""
+    shown: List[str] = []
+    for h in hits:
+        if h.text.startswith("[approximate") or "[SUPERSEDED" in h.text:
+            continue
+        if len(terms & {w[:5] for w in re.findall(r"[a-z0-9]+", h.text.lower())}) >= need:
+            shown.append(f"- {_clip(h.text, 300)}")
+        if len(shown) == _PROMPT_RECALL_LIMIT:
+            break
+    if not shown:
+        return ""
+    return "\n".join([
+        "<!-- AGENT_MEMORY_PROMPT_RECALL -->",
+        f"Memories from agent-memory ({proj}) that match this prompt. "
+        "Check them before acting; call memory_recall for more.",
+        *shown,
+    ])
+
+
+def hook_user_prompt_submit(project: Optional[str] = None) -> None:
+    """UserPromptSubmit: push memories matching the prompt into context."""
+    sys.path.insert(0, str(REPO_DIR))
+    raw = "" if sys.stdin.isatty() else sys.stdin.read()
+    try:
+        prompt = json.loads(raw).get("prompt") or ""
+    except (json.JSONDecodeError, AttributeError):
+        prompt = raw  # a harness that pipes the prompt text itself
+    out = prompt_recall(prompt, project)
+    if out:
+        print(out)
+
+
 def hook_pre_compact(project: Optional[str] = None) -> None:
     """PreCompact: Curate high-signal working memory into L2 knowledge graph before context loss."""
     proj = project or detect_project()
@@ -269,8 +335,6 @@ def hook_post_commit(project: Optional[str] = None) -> None:
             return
 
         text = f"Commit {cid}: {subject}"
-        if body:
-            text += f"\n{body}"
 
         category = "decision"
         if re.search(r"\b(fix|bug|resolve|patch)\b", subject, re.I):
@@ -290,7 +354,10 @@ def hook_post_commit(project: Optional[str] = None) -> None:
             from layers.code_layer import CodeLayer
 
         l1 = SessionLayer(project=proj)
-        l1.record(text=text, title=f"Git commit: {subject[:50]}", project=proj, category=category)
+        # The commit body is where a change's reason is written, so it is the
+        # rationale rather than more text.
+        l1.record(text=text, title=f"Git commit: {subject[:50]}", project=proj, category=category,
+                  rationale=body or None)
 
         # Record into episodic history
         try:
@@ -320,6 +387,9 @@ def hook_post_commit(project: Optional[str] = None) -> None:
                     f_path = Path(df.strip())
                     if f_path.is_file():
                         cl.index_file(f_path, project=proj)
+                    else:
+                        # Deleted or moved away: keep its symbols out of results.
+                        cl.remove_file(f_path.as_posix(), project=proj)
         except Exception:
             pass
 
@@ -387,6 +457,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     cmd_start = f'"{py}" "{hooks_py}" session-start'
     cmd_compact = f'"{py}" "{hooks_py}" pre-compact'
     cmd_end = f'"{py}" "{hooks_py}" session-end'
+    cmd_prompt = f'"{py}" "{hooks_py}" user-prompt-submit'
 
     def _is_memory_hook(entry: Dict[str, Any]) -> bool:
         return any(
@@ -398,7 +469,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
         )
 
     # Purge any previous or stale memory hooks to eliminate duplicates or broken paths
-    for ev in ("SessionStart", "PreCompact", "SessionEnd"):
+    for ev in ("SessionStart", "PreCompact", "SessionEnd", "UserPromptSubmit"):
         if ev in hooks:
             hooks[ev] = [e for e in hooks[ev] if not _is_memory_hook(e)]
 
@@ -419,6 +490,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     _ensure_hook("SessionStart", cmd_start, matcher="startup|resume|clear|compact")
     _ensure_hook("PreCompact", cmd_compact)
     _ensure_hook("SessionEnd", cmd_end)
+    _ensure_hook("UserPromptSubmit", cmd_prompt)
 
     # Sanitize and ensure Claude Code permission format (mcp__<server>__*)
     perms = data.get("permissions", {})
@@ -530,9 +602,11 @@ OPENCODE_PLUGIN_TEMPLATE = """\
 // Zero npm dependencies: shells out to the stdlib-only hooks CLI.
 //
 // Mapping:
-//   session-start -> experimental.chat.system.transform (once per session)
-//   pre-compact   -> experimental.session.compacting (output.context)
-//   session-end   -> event session.idle (fire-and-forget; sync is idempotent)
+//   session-start      -> experimental.chat.system.transform (once per session)
+//   user-prompt-submit -> chat.message reads the typed text; the matches are
+//                         pushed through system.transform for that turn
+//   pre-compact        -> experimental.session.compacting (output.context)
+//   session-end        -> event session.idle (fire-and-forget; sync is idempotent)
 //
 // Known gaps: --continue/--resume fires no bus event, so a resumed session
 // keeps whatever context it already has. session.idle fires per turn; the
@@ -541,24 +615,43 @@ export const AgentMemoryPlugin = async ({ $ }) => {
   const PY = "@@PY@@";
   const HOOKS_PY = "@@HOOKS_PY@@";
   const seen = new Set();
+  const recalled = new Map();
 
-  const run = async (verb) => {
+  const run = async (verb, stdin) => {
     try {
-      return (await $`${PY} ${HOOKS_PY} ${verb}`.text()).trim();
+      const cmd = stdin === undefined
+        ? $`${PY} ${HOOKS_PY} ${verb}`
+        : $`${PY} ${HOOKS_PY} ${verb} < ${new Response(stdin)}`;
+      return (await cmd.text()).trim();
     } catch {
       return "";
     }
   };
 
   return {
+    // Read-only here: the parts are persisted after this hook, so the matches
+    // travel through the system prompt instead of as synthetic message parts.
+    "chat.message": async (input, output) => {
+      const id = (input && input.sessionID) || "default";
+      const text = ((output && output.parts) || [])
+        .filter((p) => p && p.type === "text" && !p.synthetic)
+        .map((p) => p.text)
+        .join("\\n");
+      const ctx = text ? await run("user-prompt-submit", JSON.stringify({ prompt: text })) : "";
+      if (ctx) recalled.set(id, ctx);
+      else recalled.delete(id);
+    },
     // Mutate output.system IN PLACE (push/splice); reassigning the array is
     // a silent no-op on the OpenCode side.
     "experimental.chat.system.transform": async (input, output) => {
       const id = (input && input.sessionID) || "default";
-      if (seen.has(id)) return;
-      seen.add(id);
-      const ctx = await run("session-start");
-      if (ctx) output.system.push(ctx);
+      if (!seen.has(id)) {
+        seen.add(id);
+        const ctx = await run("session-start");
+        if (ctx) output.system.push(ctx);
+      }
+      const recall = recalled.get(id);
+      if (recall) output.system.push(recall);
     },
     "experimental.session.compacting": async (input, output) => {
       const msg = await run("pre-compact");
@@ -721,6 +814,9 @@ def main() -> None:
     p_start = subparsers.add_parser("session-start", help="Inject active context and precedents")
     p_start.add_argument("--project", "-p", help="Project name override")
 
+    p_prompt = subparsers.add_parser("user-prompt-submit", help="Inject memories matching the prompt (JSON or text on stdin)")
+    p_prompt.add_argument("--project", "-p", help="Project name override")
+
     p_compact = subparsers.add_parser("pre-compact", help="Promote high-signal L1 memories before compaction")
     p_compact.add_argument("--project", "-p", help="Project name override")
 
@@ -746,6 +842,8 @@ def main() -> None:
 
     if args.action == "session-start":
         hook_session_start(getattr(args, "project", None))
+    elif args.action == "user-prompt-submit":
+        hook_user_prompt_submit(getattr(args, "project", None))
     elif args.action == "pre-compact":
         hook_pre_compact(getattr(args, "project", None))
     elif args.action == "session-end":

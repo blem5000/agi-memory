@@ -1464,6 +1464,123 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _lk_tmp:
         _c.close()
     assert not _lk_still_open, f"{len(_lk_still_open)} SessionLayer connection(s) leaked on a store without L1 tables"
 
+# 10j. Code-graph results say when their file is gone, and a deleted file can
+# be dropped. Paths are stored relative to the indexed directory, so the check
+# uses the recorded root_dir, never the cwd: `gone.py` indexed from src/ must
+# not look missing (or present) just because the process runs elsewhere.
+from agi_memory.layers.code_layer import CodeLayer as _CL_stale
+import os as _st_os
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _st_tmp:
+    _st_root = Path(_st_tmp) / "repo" / "src"
+    _st_root.mkdir(parents=True)
+    (_st_root / "gone.py").write_text("def vanishing():\n    return 1\n\ndef caller():\n    return vanishing()\n")
+    (_st_root / "kept.py").write_text("def stays():\n    return 2\n")
+    _st_cl = _CL_stale(db_path=Path(_st_tmp) / "code.db", project="stale-proj")
+    _st_cl.index_directory(_st_root, project="stale-proj")
+    (_st_root / "gone.py").unlink()
+    _st_cwd = _st_os.getcwd()
+    _st_os.chdir(_st_tmp)
+    try:
+        assert _st_cl.missing_paths({"gone.py", "kept.py"}) == {"gone.py"}
+        _st_callers = _st_cl.mark_stale(_st_cl.get_callers("vanishing", project="stale-proj"))
+        assert _st_callers and all(c["stale"] for c in _st_callers)
+        assert "STALE" in _CL_stale.format_callers(_st_callers, "vanishing")
+        assert "STALE" in _CL_stale.format_structure(
+            _st_cl.mark_stale(_st_cl.get_structure("gone.py", project="stale-proj")))
+    finally:
+        _st_os.chdir(_st_cwd)
+    _st_cl.remove_file("gone.py", project="stale-proj")
+    assert _st_cl.get_callers("vanishing", project="stale-proj") == []
+    assert _st_cl.missing_paths({"gone.py"}) == set()
+
+    # A store indexed before root_dir existed migrates, and its rows are never
+    # reported stale because they cannot be checked.
+    _st_old = Path(_st_tmp) / "old.db"
+    _c = sqlite3.connect(_st_old)
+    _c.execute("CREATE TABLE code_files (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL, "
+               "file_path TEXT NOT NULL, language TEXT NOT NULL, content_hash TEXT NOT NULL, "
+               "symbol_count INTEGER DEFAULT 0, lines_of_code INTEGER DEFAULT 0, "
+               "last_indexed_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(project, file_path))")
+    _c.execute("INSERT INTO code_files (project, file_path, language, content_hash) VALUES ('p', 'x.py', 'python', 'h')")
+    _c.commit()
+    _c.close()
+    assert _CL_stale(db_path=_st_old, project="p").missing_paths({"x.py"}) == set()
+
+# 10k. Superseding a decision requires saying why.
+from agi_memory import mcp_server as _ms_rat
+assert _ms_rat.call_tool("memory_record", {"text": "use B", "supersedes": "#1", "project": "rat-proj"}).startswith("error")
+
+# 10l. Credentials never reach the store, and ones already stored can be removed
+# without dropping, duplicating or re-hashing a record. Fake keys are built at
+# runtime so this file does not trip secret scanners.
+import json as _rd_json
+from agi_memory.redact import redact as _rd, REDACTED as _RD
+from agi_memory import vault as _vault_rd
+_fake_google = "AIza" + "Sy" + "B" * 33
+_fake_gh = "ghp_" + "a1" * 18
+assert _rd(f"maps key {_fake_google} in manifest") == f"maps key {_RD} in manifest"
+assert _rd(_fake_gh) == _RD
+assert _rd("login with password: 'Xy7!pass9'") == f"login with password: '{_RD}'"
+assert _rd("postgres://app:hunter2secret@db:5432/x") == f"postgres://app:{_RD}@db:5432/x"
+for _keep in ("password: Option<String>", "see ImportScreen.tsx:123", "commit 204b66f fixed it",
+              "api_key = config.apiKey", "password=$DB_PASS", "token (login_screen_page.dart:44)"):
+    assert _rd(_keep) == _keep, _keep
+assert _rd(_rd(f"x {_fake_google}")) == _rd(f"x {_fake_google}")
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _rd_tmp:
+    _rd_db = Path(_rd_tmp) / "m.db"
+    _rd_v = Path(_rd_tmp) / "vault"
+    _rd_id = SessionLayer(db_path=_rd_db, project="rd-proj").record(
+        f"Firebase key is {_fake_google}", title="Key found", project="rd-proj")["id"]
+    _c = sqlite3.connect(_rd_db)
+    try:
+        _rd_narr, _rd_hash = _c.execute("select narrative, content_hash from observations where id = ?", (_rd_id,)).fetchone()
+        assert _fake_google not in _rd_narr
+        # Simulate a record stored before redaction existed, carrying prose no pattern knows.
+        _c.execute("update observations set narrative = ? where id = ?", ("prose token Qw3!Zx9$Lp2k", _rd_id))
+        _c.commit()
+    finally:
+        _c.close()
+    _rd_v.mkdir()
+    (_rd_v / "observations.jsonl").write_text(
+        _rd_json.dumps({"guid": _rd_hash, "content_hash": _rd_hash, "project": "rd-proj", "title": "short note",
+                        "narrative": f"prose token Qw3!Zx9$Lp2k and {_fake_google}"}) + "\nnot json\n",
+        encoding="utf-8")
+    _rd_out = _vault_rd.redact_store(extra=("Qw3!Zx9$Lp2k", "short"), vault_dir=_rd_v, session_db=_rd_db)
+    assert _rd_out == {"observations": 1, "vault_lines": 1}, _rd_out
+    _c = sqlite3.connect(_rd_db)
+    try:
+        _n, _h = _c.execute("select narrative, content_hash from observations where id = ?", (_rd_id,)).fetchone()
+        assert _c.execute("select count(*) from observations").fetchone()[0] == 1
+    finally:
+        _c.close()
+    assert "Qw3!" not in _n and _h == _rd_hash
+    _vl = (_rd_v / "observations.jsonl").read_text(encoding="utf-8").splitlines()
+    assert _vl[1] == "not json" and _fake_google not in _vl[0] and "Qw3!" not in _vl[0]
+    assert '"short note"' in _vl[0], "literals under 8 characters must be ignored"
+    assert _vault_rd.redact_store(extra=("Qw3!Zx9$Lp2k",), vault_dir=_rd_v, session_db=_rd_db) == \
+        {"observations": 0, "vault_lines": 0}
+
+# 10m. A prompt gets matching memories pushed to it, and only close matches:
+# the search ORs terms, so without the overlap gate every prompt would drag in
+# noise from a large store.
+from agi_memory import hooks as _hk_pr
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _pr_tmp:
+    _pr_db = Path(_pr_tmp) / "p.db"
+    _pr_sl = SessionLayer(db_path=_pr_db, project="pr-proj")
+    _pr_sl.record("Payment webhooks retry at most 5 times; the provider bans endpoints that retry more.",
+                  title="Webhook retry limit", project="pr-proj")
+    _pr_sl.record("The login screen uses the glass scaffold.", title="Login screen scaffold", project="pr-proj")
+    _pr_out = _hk_pr.prompt_recall("make the payment webhook retries more reliable", "pr-proj", _pr_db)
+    assert "Webhook retry limit" in _pr_out and "Login screen" not in _pr_out, _pr_out
+    assert _hk_pr.prompt_recall("yes", "pr-proj", _pr_db) == ""
+    _pr_sl.record("Explain how retries work in this code.", title="How this works", project="pr-proj")
+    assert _hk_pr.prompt_recall("can you explain how this works", "pr-proj", _pr_db) == ""
+    assert _hk_pr.prompt_recall("/compact", "pr-proj", _pr_db) == ""
+    assert _hk_pr.prompt_recall("webhook documentation for the billing export pipeline", "pr-proj", _pr_db) == "", \
+        "one shared word must not be enough"
+assert "memory_recall" in _ms_rat.SERVER_INSTRUCTIONS
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)

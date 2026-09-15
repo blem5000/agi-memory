@@ -50,9 +50,23 @@ except ImportError:
     except OSError:
         __version__ = "0.0.0+unknown"
 
+# Sent in the initialize reply. Clients that defer tool schemas still show a
+# server's instructions, and a tool description alone says what a tool does,
+# never when to reach for it -- agents with the tools available called
+# memory_recall zero times across 146 sessions.
+SERVER_INSTRUCTIONS = (
+    "agi-memory holds this user's decisions, bugfixes and conventions, shared across all their "
+    "coding assistants, plus a code graph. Pass project=<repository name>.\n"
+    "- Before changing code in an area or choosing between approaches: memory_recall with the "
+    "area's keywords. Matching is by keyword, so include synonyms.\n"
+    "- On an error or failing test: memory_recall with the error text before debugging from scratch.\n"
+    "- Before renaming, moving or deleting a symbol: code_impact.\n"
+    "- After settling a decision or fixing a non-trivial bug: memory_record with rationale."
+)
+
 TOOLS = [
     {"name": "memory_recall",
-     "description": "Search recent agent session memory (decisions, fixes, context). Fast, local.",
+     "description": "Search recent agent session memory (decisions, fixes, context). Fast, local. Matching is by keyword, not meaning, and any term can match: include the other words a past note may have used (e.g. 'login auth authentication session').",
      "inputSchema": {"type": "object",
                      "properties": {"query": {"type": "string", "description": "Search query or keywords to recall"},
                                     "project": {"type": "string", "description": "Optional project name filter"},
@@ -73,7 +87,7 @@ TOOLS = [
                                     "category": {"type": "string", "enum": ["architecture", "pattern", "bugfix", "convention", "decision"],
                                                  "default": "decision", "description": "Category"},
                                     "project": {"type": "string", "description": "Target project name"},
-                                    "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory this replaces. MUTATES it: its type flips to superseded, so a caller gating destructive operations should treat memory_record with this set as one."},
+                                    "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory this replaces. Requires `rationale` (why the older one no longer holds). MUTATES it: its type flips to superseded, so a caller gating destructive operations should treat memory_record with this set as one."},
                                     "rationale": {"type": "string", "description": "The constraints and tradeoffs behind the decision. A later session cannot re-examine a conclusion it has no reasoning for, so record it whenever the why is not obvious from the text alone."},
                                     "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped"], "default": "agent-inferred", "description": "user-confirmed ONLY if the user stated or approved it; agent-inferred for anything you concluded yourself, however confident. An inflated value is worse than none."},
                                     "relations": {"type": "array",
@@ -398,6 +412,10 @@ def call_tool(name, args):
         category = args.get("category", "decision")
         supersedes = args.get("supersedes")
         relations = args.get("relations") or []
+        # Replacing a decision is the moment its reason is known and most
+        # needed later; a supersession without one is just a silent flip.
+        if supersedes and not str(args.get("rationale") or "").strip():
+            return "error: 'rationale' is required with 'supersedes' -- say why the earlier decision no longer holds"
 
         res = l1.record(
             text=text,
@@ -513,7 +531,7 @@ def call_tool(name, args):
     if name == "code_structure":
         cl = CodeLayer(project=project)
         target_path = args.get("path", ".") or "."
-        syms = cl.get_structure(target_path=target_path, project=project)
+        syms = cl.mark_stale(cl.get_structure(target_path=target_path, project=project), project)
         return CodeLayer.format_structure(syms)
     if name == "code_callers":
         cl = CodeLayer(project=project)
@@ -521,7 +539,7 @@ def call_tool(name, args):
         if not sym:
             return "error: 'symbol' parameter is required"
         depth = int(args.get("max_depth", 3) or 3)
-        callers = cl.get_callers(sym, project=project, max_depth=depth)
+        callers = cl.mark_stale(cl.get_callers(sym, project=project, max_depth=depth), project)
         return CodeLayer.format_callers(callers, sym)
     if name == "code_dependencies":
         cl = CodeLayer(project=project)
@@ -529,7 +547,7 @@ def call_tool(name, args):
         if not sym:
             return "error: 'symbol' parameter is required"
         depth = int(args.get("max_depth", 3) or 3)
-        deps = cl.get_dependencies(sym, project=project, max_depth=depth)
+        deps = cl.mark_stale(cl.get_dependencies(sym, project=project, max_depth=depth), project)
         return CodeLayer.format_dependencies(deps, sym)
     if name == "code_impact":
         cl = CodeLayer(project=project)
@@ -538,6 +556,7 @@ def call_tool(name, args):
             return "error: 'target' parameter is required"
         depth = int(args.get("max_depth", 5) or 5)
         impact = cl.get_impact(target, project=project, max_depth=depth)
+        impact["stale_files"] = sorted(cl.missing_paths(impact["impacted_files"], project))
         return CodeLayer.format_impact(impact)
     if name == "code_index":
         cl = CodeLayer(project=project)
@@ -576,7 +595,8 @@ def run_mcp_server():
             if method == "initialize":
                 reply(mid, {"protocolVersion": "2024-11-05",
                             "capabilities": {"tools": {}},
-                            "serverInfo": {"name": "agi-memory", "version": __version__}})
+                            "serverInfo": {"name": "agi-memory", "version": __version__},
+                            "instructions": SERVER_INSTRUCTIONS})
                 # Trigger initial background pull to sync multi-device memories
                 try:
                     import threading
@@ -1052,6 +1072,20 @@ def main(argv: list[str] | None = None) -> None:
             # is how install.sh runs, so terminal users could not promote at all.
             promote.main(argv[1:])
             return
+        elif cmd == "redact":
+            import argparse
+            ap = argparse.ArgumentParser(prog="agi-memory redact",
+                                         description="Strip credentials from stored memories")
+            # A file, not an argument: a secret typed on the command line lands in shell history.
+            ap.add_argument("--values", help="File of known secret literals, one per line (8+ characters)")
+            a = ap.parse_args(argv[1:])
+            extra = ()
+            if a.values:
+                extra = tuple(s.strip() for s in Path(a.values).read_text(encoding="utf-8").splitlines() if s.strip())
+            res = vault.redact_store(extra=extra)
+            print(f"Redacted {res['observations']} observation(s) and {res['vault_lines']} vault line(s). "
+                  "The vault's git history still holds the old text: rotate the credentials.")
+            return
         elif cmd == "recall":
             cmd_recall(argv[1:])
             return
@@ -1105,6 +1139,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory blocks                    List pinned core memory blocks")
             print("  agi-memory alias list|add|rm         Curate the synonym/acronym table")
             print("  agi-memory promote [--dry-run]       Promote durable learnings into the knowledge graph")
+            print("  agi-memory redact [--values FILE]    Strip credentials from stored memories")
             print("  agi-memory init [PATH]               Wire a project & install the /agi-init slash command")
             print("  agi-memory analyze [PATH] [--json]   Report detected stack, commands, layout")
             print("  agi-memory integrate [COMMAND ...]   Assistant integration & project wiring")

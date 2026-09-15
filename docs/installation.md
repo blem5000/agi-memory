@@ -101,6 +101,7 @@ agi-memory integrate hooks agy claude
 
 Supported lifecycle triggers:
 - **`session-start` / `PreInvocation`**: Injects pinned Core Memory invariants and top project precedents directly into the prompt context.
+- **`user-prompt-submit`** (Claude Code `UserPromptSubmit`, OpenCode `chat.message`): When you send a prompt, memories that share several of its words are added to the context, up to 3, so the assistant sees them without deciding to call `memory_recall`. Prompts that match nothing closely add nothing. Antigravity has no prompt event wired yet.
 - **`pre-compact`**: Promotes working memories into L2 knowledge graph triples before context window compaction.
 - **`session-end` / `Stop`**: Triggers immediate Git sync of the memory vault with your remote repository.
 - **`pre-commit`**: Runs offline test suite checks before git commits.

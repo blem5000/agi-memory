@@ -655,6 +655,9 @@ def _dedupe_paths(rows: list) -> list:
     return out
 
 
+_STALE_NOTE = " [STALE: file no longer exists, re-run code_index]"
+
+
 class CodeLayer(MemoryLayer):
     """Native SQLite Structural Code Graph layer."""
     name = "code"
@@ -696,6 +699,10 @@ class CodeLayer(MemoryLayer):
                 UNIQUE(project, file_path)
             )
         """)
+        # Where each file was indexed from. Paths are stored relative to that
+        # directory, so without it a result cannot be checked against the disk.
+        if "root_dir" not in {r[1] for r in cur.execute("PRAGMA table_info(code_files)")}:
+            cur.execute("ALTER TABLE code_files ADD COLUMN root_dir TEXT")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS code_symbols (
@@ -826,9 +833,9 @@ class CodeLayer(MemoryLayer):
             cur.execute("DELETE FROM code_files WHERE id = ?", (f_row[0],))
 
         cur.execute("""
-            INSERT INTO code_files (project, file_path, language, content_hash, symbol_count, lines_of_code)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (proj, rel_path, lang, chash, len(symbols), loc))
+            INSERT INTO code_files (project, file_path, language, content_hash, symbol_count, lines_of_code, root_dir)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (proj, rel_path, lang, chash, len(symbols), loc, str(root.resolve())))
         file_id = cur.lastrowid
 
         for sym in symbols:
@@ -908,6 +915,51 @@ class CodeLayer(MemoryLayer):
             "total_edges": total_edges,
             "elapsed_ms": round(elapsed_ms, 2)
         }
+
+    def remove_file(self, rel_path: str, project: Optional[str] = None) -> None:
+        """Drop a file's symbols and edges, e.g. after a commit deleted it."""
+        proj = project or self.project or "global"
+        con = self._get_con(mode="rw")
+        try:
+            for table in ("code_symbols", "code_edges", "code_files"):
+                con.execute(f"DELETE FROM {table} WHERE project = ? AND file_path = ?", (proj, rel_path))
+            con.commit()
+        finally:
+            con.close()
+
+    def missing_paths(self, paths, project: Optional[str] = None) -> Set[str]:
+        """Indexed paths whose file no longer exists where it was indexed from.
+
+        Checked at query time: an agent acting on a dead path is worse off than
+        one told the index is out of date. Files indexed before root_dir was
+        recorded cannot be checked, so they are never reported.
+        """
+        wanted = {p for p in paths if p}
+        if not wanted:
+            return set()
+        proj = project or self.project
+        sql = "SELECT file_path, root_dir FROM code_files WHERE root_dir IS NOT NULL"
+        args: list = []
+        if proj:
+            sql += " AND project = ?"
+            args.append(proj)
+        con = self._get_con(mode="ro")
+        try:
+            rows = con.execute(sql, args).fetchall()
+        finally:
+            con.close()
+        checked, present = set(), set()
+        for fp, root in rows:
+            if fp in wanted:
+                checked.add(fp)
+                if (Path(root) / fp).exists():
+                    present.add(fp)
+        return checked - present
+
+    def mark_stale(self, rows: List[Dict[str, Any]], project: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Copy result rows with `stale` set where the file is gone."""
+        gone = self.missing_paths({r.get("file_path") for r in rows}, project)
+        return [{**r, "stale": r.get("file_path") in gone} for r in rows]
 
     def search_symbols(self, query: str, project: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """Microsecond symbol search via SQLite FTS5 with fallback to prefix match."""
@@ -1248,12 +1300,14 @@ class CodeLayer(MemoryLayer):
 
     def search(self, query: str, limit: int = 5) -> List[Hit]:
         """Search code symbols and return as standard MemoryLayer Hits."""
-        syms = self.search_symbols(query, limit=limit)
+        syms = self.mark_stale(self.search_symbols(query, limit=limit))
         hits = []
         for s in syms:
             txt = f"{s['kind'].upper()} {s['qualified_name']} ({s['file_path']}:{s['start_line']}-{s['end_line']})"
             if s.get("signature"):
                 txt += f" :: {s['signature']}"
+            if s["stale"]:
+                txt += _STALE_NOTE
             hits.append(Hit(text=txt, source=self.name, ref=s["file_path"], score=1.0))
         return hits
 
@@ -1269,7 +1323,7 @@ class CodeLayer(MemoryLayer):
 
         lines = []
         for fp, sym_list in by_file.items():
-            lines.append(f"### `{fp}` ({len(sym_list)} symbols)")
+            lines.append(f"### `{fp}` ({len(sym_list)} symbols)" + (_STALE_NOTE if sym_list[0].get("stale") else ""))
             for s in sym_list:
                 prefix = "  - " if s.get("parent_symbol") else "- "
                 sig = f"`{s['signature']}`" if s.get("signature") else f"`{s['qualified_name']}`"
@@ -1307,7 +1361,8 @@ class CodeLayer(MemoryLayer):
         lines = [f"### Callers & Inbound References for `{symbol}` ({len(callers)} found"
                  + (f", showing first {limit} by depth)" if len(callers) > limit else ")")]
         for c in callers[:limit]:
-            lines.append(f"- **{c['caller']}** [{c['relation']}] (L{c['line_number']} in `{c['file_path']}`) [depth {c['depth']}]")
+            lines.append(f"- **{c['caller']}** [{c['relation']}] (L{c['line_number']} in `{c['file_path']}`) [depth {c['depth']}]"
+                         + (_STALE_NOTE if c.get("stale") else ""))
             lines.append(f"  *Chain*: {c['call_chain']}")
         lines += CodeLayer._render_tail(callers, limit, "callers")
         return "\n".join(lines)
@@ -1322,7 +1377,8 @@ class CodeLayer(MemoryLayer):
         lines = [f"### Outbound Dependencies & Calls for `{symbol}` ({len(deps)} found"
                  + (f", showing first {limit} by depth)" if len(deps) > limit else ")")]
         for d in deps[:limit]:
-            lines.append(f"- **{d['target']}** [{d['relation']}] (L{d['line_number']} in `{d['file_path']}`) [depth {d['depth']}]")
+            lines.append(f"- **{d['target']}** [{d['relation']}] (L{d['line_number']} in `{d['file_path']}`) [depth {d['depth']}]"
+                         + (_STALE_NOTE if d.get("stale") else ""))
             lines.append(f"  *Chain*: {d['dependency_chain']}")
         lines += CodeLayer._render_tail(deps, limit, "dependencies")
         return "\n".join(lines)
@@ -1338,6 +1394,8 @@ class CodeLayer(MemoryLayer):
         ]
         if impact.get("impacted_files"):
             lines.append(f"- **Files Affected**: {', '.join(impact['impacted_files'][:10])}")
+        if impact.get("stale_files"):
+            lines.append(f"- **Stale (file no longer exists, re-run code_index)**: {', '.join(impact['stale_files'][:10])}")
         if impact.get("impacted_symbols"):
             lines.append(f"- **Symbols Affected**: {', '.join(impact['impacted_symbols'][:15])}")
         if impact.get("dependency_chains"):

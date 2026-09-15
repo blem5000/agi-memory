@@ -68,6 +68,7 @@ agi-memory timeline -n 5 --project my-app
 - **Callers & Dependencies (`code_callers`, `code_dependencies`)**: Query incoming callers (*"who calls function X?"*) and outbound dependencies (*"what does class Y depend on?"*) in 10ms without booting heavyweight LSPs.
 - **Transitive Blast-Radius Impact Analysis (`code_impact`)**: Analyzes the multi-hop dependency tree to determine every symbol and file affected before you refactor or delete code.
 - **Symbol Structure & Hierarchy (`code_structure`, `code_index`)**: Instantly inspect file symbol trees and trigger incremental codebase re-indexing.
+- **Stale results are labelled**: every code-graph answer is checked against the disk when you ask. A result whose file no longer exists is marked `[STALE: file no longer exists, re-run code_index]`, so an agent is not sent to a dead path. The git post-commit hook re-indexes the files a commit changed and drops the ones it deleted. Files indexed by an earlier version cannot be checked until they are re-indexed.
 ```bash
 # Inspect blast radius before refactoring a symbol
 agi-memory impact SessionLayer --project my-app

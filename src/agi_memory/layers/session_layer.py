@@ -17,11 +17,14 @@ from .base import Hit, MemoryLayer, open_db
 
 try:
     from agi_memory.config import DEFAULT_DB, get_default_db
+    from agi_memory.redact import redact
 except ImportError:
     try:
         from ..config import DEFAULT_DB, get_default_db
+        from ..redact import redact
     except (ImportError, ValueError):
         from config import DEFAULT_DB, get_default_db
+        from redact import redact
 
 DB = get_default_db()
 
@@ -553,6 +556,8 @@ class SessionLayer(MemoryLayer):
                category: str = "decision", supersedes: str | None = None,
                rationale: str | None = None, origin: str | None = None) -> dict:
         """Record an observation/decision into L1 memory via direct SQLite FTS5 insertion."""
+        # Before anything is hashed, inserted or mirrored to the vault's git remote.
+        text, title, rationale = redact(text), redact(title), redact(rationale)
         proj = project or self.project or "global"
         tit = title or (text[:60].strip() + ("..." if len(text) > 60 else ""))
         cat = (category or "decision").strip().lower()

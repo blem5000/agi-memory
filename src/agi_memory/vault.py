@@ -38,6 +38,7 @@ try:
     )
     from agi_memory.layers.session_layer import SessionLayer, add_record_listener, remove_record_listener
     from agi_memory.layers.graph_layer import GraphLayer, add_edge_listener, remove_edge_listener
+    from agi_memory.redact import redact
 except ImportError:
     from config import (
         DATA_DIR,
@@ -55,6 +56,7 @@ except ImportError:
     )
     from layers.session_layer import SessionLayer, add_record_listener, remove_record_listener
     from layers.graph_layer import GraphLayer, add_edge_listener, remove_edge_listener
+    from redact import redact
 
 NO_SIGNAL_PATTERN = re.compile(
     r"^(none[\s,]*)+$|no (?:new |technical )*(patterns|learnings|work|changes)|"
@@ -466,15 +468,16 @@ def import_from_vault(
                     if ch in existing_hashes or ch in tombstoned:
                         continue
 
+                    # Redacted here too: another machine's vault may predate redaction.
                     rows_to_insert.append((
                         d.get("memory_session_id", "sync"),
                         d.get("project"),
                         d.get("type", "observation"),
-                        d.get("title", ""),
-                        d.get("subtitle", ""),
-                        d.get("facts", ""),
-                        d.get("narrative", ""),
-                        d.get("concepts", ""),
+                        redact(d.get("title", "")),
+                        redact(d.get("subtitle", "")),
+                        redact(d.get("facts", "")),
+                        redact(d.get("narrative", "")),
+                        redact(d.get("concepts", "")),
                         d.get("files_read", ""),
                         d.get("files_modified", ""),
                         d.get("prompt_number", 0),
@@ -485,7 +488,7 @@ def import_from_vault(
                         d.get("generated_by_model", "sync"),
                         d.get("relevance_count", 0),
                         d.get("sync_rev", "vault"),
-                        d.get("rationale"),
+                        redact(d.get("rationale")),
                         d.get("supersedes_refs"),
                         d.get("origin")
                     ))
@@ -609,6 +612,70 @@ def import_from_vault(
         con.close()
 
     return {"observations": imported_obs, "graph": imported_graph}
+
+
+_REDACT_FIELDS = ("title", "subtitle", "facts", "narrative", "concepts", "rationale",
+                  "files_read", "files_modified")
+
+
+def redact_store(extra: tuple = (), vault_dir: Path | str | None = None,
+                 session_db: Path | str | None = None) -> dict[str, int]:
+    """Strip credentials from memories already stored, in SQLite and in the vault.
+
+    Rows are updated in place and content_hash is kept, so nothing is
+    re-exported, duplicated or dropped. `extra` holds known literals that no
+    pattern recognises; ones shorter than 8 characters are ignored, since
+    replacing a short string everywhere would damage ordinary text. The vault's
+    git history still holds the old text.
+    """
+    extra = tuple(v for v in extra if v and len(v) >= 8)
+    v_dir = init_vault(vault_dir)
+    s_db, _ = _active_dbs(session_db, None)
+
+    rows = 0
+    if s_db.exists():
+        SessionLayer._init_db(s_db)
+        con = open_db(s_db)
+        try:
+            updates = []
+            for r in con.execute(f"SELECT id, {', '.join(_REDACT_FIELDS)} FROM observations"):
+                new = [redact(v, extra) for v in r[1:]]
+                if new != list(r[1:]):
+                    updates.append((*new, r[0]))
+            con.executemany(
+                f"UPDATE observations SET {', '.join(f + ' = ?' for f in _REDACT_FIELDS)} WHERE id = ?",
+                updates)
+            con.commit()
+            rows = len(updates)
+        except BaseException:
+            con.rollback()
+            con.close()
+            raise
+        con.close()
+        _rebuild_fts(s_db, ("observations_fts",))
+
+    lines = 0
+    obs_file = v_dir / "observations.jsonl"
+    if obs_file.exists():
+        # ponytail: an append landing between this read and the replace is lost;
+        # this is a one-off maintenance command, not a hot path.
+        tmp = obs_file.with_suffix(".redact.tmp")
+        with open(obs_file, "r", encoding="utf-8") as src, open(tmp, "w", encoding="utf-8") as out:
+            for line in src:
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    out.write(line)
+                    continue
+                if isinstance(d, dict):
+                    new = {k: (redact(v, extra) if k in _REDACT_FIELDS else v) for k, v in d.items()}
+                    if new != d:
+                        line = json.dumps(new, ensure_ascii=False) + "\n"
+                        lines += 1
+                out.write(line)
+        tmp.replace(obs_file)
+
+    return {"observations": rows, "vault_lines": lines}
 
 
 def _rebuild_fts(db: Path, fts_tables: tuple) -> None:

@@ -26,6 +26,7 @@ When operating in this codebase:
   - `layers/code_layer.py`: L4 Structural Code Graph (Python stdlib AST & regex parser, callers, dependencies, blast-radius impact analysis).
   - `vault.py`: Canonical Git-friendly append-only JSONL vault (`~/.agi-memory/vault/`) & deduplication engine.
   - `sync.py`: Background Git/GitHub sync & `gh` CLI automation.
+  - `redact.py`: Credential redaction applied on record and vault import (`agi-memory redact` cleans stored memories).
   - `hooks.py`: Universal lifecycle hooks dispatcher (`session-start`, `pre-compact`, `session-end`, `pre-commit`, `post-commit`).
   - `promote.py`: Automated high-signal batch prompter L1 -> L2 (`--auto`).
   - `bootstrap.py`: Zero-touch cold-start memory seeder from Git history & README (`agi-memory bootstrap`).

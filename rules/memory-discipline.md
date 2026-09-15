@@ -28,6 +28,7 @@ When settling an architectural pattern, fixing a non-trivial bug, or establishin
   - `category`: "architecture" | "pattern" | "bugfix" | "convention" | "decision".
   - `project`: Target project name (`agi-memory`).
   - `supersedes`: (Optional) ID (`#1234`) or keywords of an older memory this overrides.
+    Must come with `rationale`: why the older decision no longer holds.
   - `relations`: (Optional) 1–2 Knowledge graph triples to store directly in L2:
     `[{"source": "AuthService", "relation": "USES", "target": "SecureStorage"}]`
 
