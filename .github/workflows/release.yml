@@ -41,7 +41,11 @@ jobs:
     name: Update Homebrew Formula Checksum
     needs: verify
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # Forks distribute via git tags, not Homebrew: the formulas and
+    # packaging/update_formula.py point at the upstream tarballs, so running
+    # this anywhere else 404s (or worse, rewrites fork formulas to upstream
+    # URLs). Upstream behavior is unchanged.
+    if: github.repository == 'kdbhalala/agi-memory' && startsWith(github.ref, 'refs/tags/')
     steps:
       # A formula's checksum is the hash of the tag's own tarball, so it cannot
       # exist in the commit being tagged -- it is only computable afterwards.
@@ -137,6 +141,12 @@ jobs:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
+    # The PyPI project `agi-memory` belongs to upstream and its trusted
+    # publisher is registered for kdbhalala/agi-memory only, so this job can
+    # never succeed on a fork (and a fork must not publish under that name
+    # anyway). Forks distribute via git tags: uv/pipx install @ git+...@vX.Y.Z.
+    # Upstream behavior is unchanged.
+    if: github.repository == 'kdbhalala/agi-memory'
     environment:
       name: pypi
       url: https://pypi.org/p/agi-memory
@@ -156,7 +166,11 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [build, publish-pypi]
+    # NOTE (fork): was [build, publish-pypi]. publish-pypi never runs on a
+    # fork (see above), and a skipped need would skip this job too, so the
+    # release waits on build only. On upstream publish still runs; the release
+    # just no longer blocks on it.
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
