@@ -216,23 +216,28 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
     need = min(4, max(2, -(-len(terms) // 4)))
     proj = project or detect_project()
     try:
-        hits = SessionLayer(db_path=db_path, project=proj).search(text, limit=10)
+        layer = SessionLayer(db_path=db_path, project=proj)
+        hits = layer.search(text, limit=10)
     except Exception:
         return ""
     shown: List[str] = []
+    shown_ids: List[str] = []
     for h in hits:
         if h.text.startswith("[approximate") or "[SUPERSEDED" in h.text:
             continue
         if len(terms & {w[:5] for w in re.findall(r"[a-z0-9]+", h.text.lower())}) >= need:
             shown.append(f"- {_clip(h.text, 300)}")
+            shown_ids.append(h.ref)
         if len(shown) == _PROMPT_RECALL_LIMIT:
             break
     if not shown:
         return ""
+    layer.mark_shown(shown_ids)
     return "\n".join([
         "<!-- AGENT_MEMORY_PROMPT_RECALL -->",
         f"Memories from agent-memory ({proj}) that match this prompt. "
-        "Check them before acting; call memory_recall for more.",
+        "Check them before acting; call memory_recall for more. "
+        "If one shapes your work, cite its #id when you memory_record.",
         *shown,
     ])
 

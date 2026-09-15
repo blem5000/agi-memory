@@ -61,7 +61,8 @@ SERVER_INSTRUCTIONS = (
     "area's keywords. Matching is by keyword, so include synonyms.\n"
     "- On an error or failing test: memory_recall with the error text before debugging from scratch.\n"
     "- Before renaming, moving or deleting a symbol: code_impact.\n"
-    "- After settling a decision or fixing a non-trivial bug: memory_record with rationale."
+    "- After settling a decision or fixing a non-trivial bug: memory_record with rationale.\n"
+    "- When a recalled memory shaped what you did, cite its #id in memory_record's text or rationale."
 )
 
 TOOLS = [
@@ -349,6 +350,7 @@ def call_tool(name, args):
         pinned = l1.get_pinned_blocks(project=project) if hasattr(l1, "get_pinned_blocks") else []
         core_block = _core_text(pinned)
         hits = l1.search(query, limit)
+        l1.mark_shown([h.ref for h in hits])
         recent_text = _hits_text(hits) if hits else _miss_text(query, project, l1)
         if core_block:
             return f"{core_block}\n\n## recent\n{recent_text}"
@@ -970,11 +972,13 @@ def cmd_stats(argv: list[str]) -> None:
         projects = {row[0] or "default": row[1] for row in cur.fetchall()}
     finally:
         conn.close()
+    usage = l1.usage_summary(project=args.project)
 
     if args.json:
         print(json.dumps({
             "database": str(l1.db_path),
             "filter_project": args.project,
+            "recall_usage": usage,
             "l1_observations": total_obs,
             "core_pinned_blocks": pinned_blocks,
             "l2_entities": total_entities,
@@ -993,6 +997,8 @@ def cmd_stats(argv: list[str]) -> None:
     print(f"L2 Graph:     {total_entities} entities, {active_edges} active relations")
     print(f"L3 Episodic:  {total_sessions} agent sessions tracked")
     print(f"L4 Code AST:  {total_symbols} code symbols indexed")
+    print(f"Recall use:   {usage['shown']} memories shown {usage['shows']} times; "
+          f"{usage['cited']} later cited by #id in a new record")
     if projects:
         print("\nActive Projects (top):")
         for proj, cnt in projects.items():

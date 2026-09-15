@@ -1074,6 +1074,15 @@ does send instructions, was called twice in total, so pull alone does not work.
 - Not yet measured: whether recall calls or outcomes change. Re-count after a
   week of real sessions.
 
+**Usefulness signal, measuring only (2026-09-15).** `memory_usage`, keyed by
+`content_hash` so compaction's rebuild with new row ids does not reset it,
+counts each memory shown by `memory_recall` or the prompt hook, and each later
+`memory_record` whose text or rationale cites a shown memory by `#id`. An
+unshown `#id` (an issue number) is ignored. `agi-memory stats` reports both. It
+does not change ranking yet: citations are sparse, so demoting shown-but-uncited
+memories now would demote good ones that nobody happened to cite. Revisit with
+a week of data. `memory_recall_deep` does not mark shows.
+
 **Vault history, done (2026-09-15):** squashed to one commit and force-pushed;
 no reachable object holds a Google key. The pre-rewrite history is kept as a
 local git bundle. Another machine with an old clone cannot push it back (its

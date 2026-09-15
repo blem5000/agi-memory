@@ -1583,6 +1583,25 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _pr_tmp:
         "one shared word must not be enough"
 assert "memory_recall" in _ms_rat.SERVER_INSTRUCTIONS
 
+# 10n. Whether recall helps is measured: shown memories are counted, a later
+# record citing one by #id counts as use, an unshown #id (an issue number) does
+# not, and the counts survive compaction rebuilding observations with new ids.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _us_tmp:
+    _us_db = Path(_us_tmp) / "u.db"
+    _us_v = Path(_us_tmp) / "vault"
+    _us_sl = SessionLayer(db_path=_us_db, project="us-proj")
+    _us_a = _us_sl.record("Payment webhooks retry at most 5 times; the provider bans endpoints that retry more.",
+                          title="Webhook retry limit", project="us-proj")["id"]
+    _us_b = _us_sl.record("Invoices are rendered server-side.", title="Invoice rendering", project="us-proj")["id"]
+    assert _us_sl.usage_summary() == {"shown": 0, "shows": 0, "cited": 0}
+    assert "Webhook retry limit" in _hk_pr.prompt_recall("make the payment webhook retries more reliable", "us-proj", _us_db)
+    assert _us_sl.usage_summary() == {"shown": 1, "shows": 1, "cited": 0}
+    _us_sl.record(f"Kept the retry cap per #{_us_a}; fixes #{_us_b} in the tracker", title="Retry tuning", project="us-proj")
+    assert _us_sl.usage_summary(project="us-proj") == {"shown": 1, "shows": 1, "cited": 1}, _us_sl.usage_summary()
+    _vault_rd.export_dirty_to_vault(vault_dir=_us_v, session_db=_us_db, graph_db=_us_db)
+    _vault_rd.import_from_vault(vault_dir=_us_v, session_db=_us_db, graph_db=_us_db, replace=True)
+    assert _us_sl.usage_summary(project="us-proj") == {"shown": 1, "shows": 1, "cited": 1}, "counts must survive a rebuild"
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)

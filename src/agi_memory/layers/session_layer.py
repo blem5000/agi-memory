@@ -28,6 +28,18 @@ except ImportError:
 
 DB = get_default_db()
 
+# Whether retrieved memories are used. Keyed by content_hash, not row id:
+# compaction rebuilds `observations` from the vault with new ids, which would
+# silently reset any counter stored on the row itself.
+_USAGE_DDL = """
+    CREATE TABLE IF NOT EXISTS memory_usage (
+        content_hash TEXT PRIMARY KEY,
+        shown_count INTEGER NOT NULL DEFAULT 0,
+        cited_count INTEGER NOT NULL DEFAULT 0,
+        last_shown_at TEXT
+    )
+"""
+
 OnRecordCallback = Callable[[dict], None]
 _RECORD_LISTENERS: list[OnRecordCallback] = []
 
@@ -551,6 +563,51 @@ class SessionLayer(MemoryLayer):
         scored.sort(reverse=True)
         return [(row_id,) for _, row_id in scored[:limit]]
 
+    def mark_shown(self, ids) -> None:
+        """Count that these memories were put in front of an agent."""
+        ids = [int(i) for i in ids if str(i).isdigit()]
+        if not ids or not self.db_path.exists():
+            return
+        con = open_db(self.db_path)
+        try:
+            con.execute(_USAGE_DDL)
+            ph = ",".join("?" for _ in ids)
+            con.execute(f"""
+                INSERT INTO memory_usage (content_hash, shown_count, last_shown_at)
+                SELECT content_hash, 1, CURRENT_TIMESTAMP FROM observations
+                WHERE id IN ({ph}) AND content_hash IS NOT NULL
+                ON CONFLICT(content_hash) DO UPDATE SET
+                    shown_count = shown_count + 1, last_shown_at = excluded.last_shown_at
+            """, ids)
+            con.commit()
+        except sqlite3.Error:
+            pass  # a counter must never break recall
+        finally:
+            con.close()
+
+    def usage_summary(self, project: str | None = None) -> dict:
+        """How many shown memories were later cited: the measure of whether recall helps."""
+        empty = {"shown": 0, "shows": 0, "cited": 0}
+        if not self.db_path.exists():
+            return empty
+        con = open_db(self.db_path)
+        try:
+            con.execute(_USAGE_DDL)
+            sql = """SELECT COUNT(*), COALESCE(SUM(u.shown_count), 0),
+                            COALESCE(SUM(CASE WHEN u.cited_count > 0 THEN 1 ELSE 0 END), 0)
+                     FROM memory_usage u
+                     WHERE u.shown_count > 0"""
+            args: list = []
+            if project:
+                sql += " AND u.content_hash IN (SELECT content_hash FROM observations WHERE project = ?)"
+                args.append(project)
+            shown, shows, cited = con.execute(sql, args).fetchone()
+            return {"shown": shown, "shows": shows, "cited": cited}
+        except sqlite3.Error:
+            return empty
+        finally:
+            con.close()
+
     def record(self, text: str, title: str | None = None,
                project: str | None = None, metadata: dict | None = None,
                category: str = "decision", supersedes: str | None = None,
@@ -705,6 +762,22 @@ class SessionLayer(MemoryLayer):
             if supersedes_refs:
                 cur.execute("UPDATE observations SET supersedes_refs = ? WHERE id = ?",
                             (json.dumps(supersedes_refs), obs_id))
+
+        # Implicit usefulness: a new record naming an earlier memory by #id,
+        # after that memory was shown, is evidence it was used. Only memories
+        # already shown count, so "fixes #42" about an issue tracker does not.
+        cited = {int(m) for m in re.findall(r"#(\d+)", f"{text} {why or ''}")} - {obs_id}
+        if cited:
+            try:
+                cur.execute(_USAGE_DDL)
+                ph = ",".join("?" for _ in cited)
+                cur.execute(f"""
+                    UPDATE memory_usage SET cited_count = cited_count + 1
+                    WHERE shown_count > 0
+                      AND content_hash IN (SELECT content_hash FROM observations WHERE id IN ({ph}))
+                """, list(cited))
+            except sqlite3.Error:
+                pass
 
         con.commit()
         con.close()
