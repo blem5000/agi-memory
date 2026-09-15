@@ -104,6 +104,22 @@ def _detect_git_touched_files(cwd: Path | str | None = None) -> List[str]:
     return files
 
 
+def _detect_git_range(before: Optional[str], cwd: Path | str | None = None) -> Tuple[List[Tuple[str, str]], List[str]]:
+    """Commits made since `before` as (hash, subject), and the files they changed."""
+    if not before:
+        return [], []
+    root = str(Path(cwd) if cwd else Path.cwd())
+    try:
+        log = subprocess.check_output(["git", "log", "--format=%h%x1f%s", f"{before}..HEAD"],
+                                      cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+        names = subprocess.check_output(["git", "diff", "--name-only", f"{before}..HEAD"],
+                                        cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+    except Exception:
+        return [], []  # not a repo, or `before` is gone after a history rewrite
+    commits = [tuple(line.split("\x1f", 1)) for line in log.splitlines() if "\x1f" in line]
+    return commits, [n for n in names.splitlines() if n]
+
+
 # Question words carry no retrieval signal but would AND away every match.
 _STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "do", "did", "does", "what",
@@ -233,6 +249,29 @@ class EpisodicLayer(MemoryLayer):
             "status": row[7],
         }
 
+    def set_goal_if_empty(self, goal: str, project: Optional[str] = None) -> bool:
+        """Give the latest active session its goal, once.
+
+        Every real session had an empty goal: nothing ever set one. The first
+        prompt of a session says what it was for, so it is the goal.
+        """
+        goal = (goal or "").strip()
+        if not goal:
+            return False
+        proj = project or self.project or "global"
+        con = self._get_con()
+        try:
+            cur = con.execute("""
+                UPDATE episodic_sessions SET goal = ?
+                WHERE id = (SELECT id FROM episodic_sessions WHERE project = ? AND status = 'active'
+                            ORDER BY started_at DESC, id DESC LIMIT 1)
+                  AND COALESCE(goal, '') = ''
+            """, (goal, proj))
+            con.commit()
+            return cur.rowcount > 0
+        finally:
+            con.close()
+
     def set_outcome(self, outcome: str, session_id: Optional[str] = None,
                     project: Optional[str] = None) -> Optional[str]:
         """Record how a session went, on the session itself.
@@ -312,13 +351,13 @@ class EpisodicLayer(MemoryLayer):
             return None
 
         # Fetch current session start timestamp
-        cur.execute("SELECT started_at, touched_files, commits, goal FROM episodic_sessions WHERE session_id = ?", (sid,))
+        cur.execute("SELECT started_at, touched_files, commits, goal, git_head_before FROM episodic_sessions WHERE session_id = ?", (sid,))
         sess_row = cur.fetchone()
         if not sess_row:
             con.close()
             return None
 
-        started_str, existing_files_raw, existing_commits_raw, existing_goal = sess_row
+        started_str, existing_files_raw, existing_commits_raw, existing_goal, head_before = sess_row
 
         existing_files = set(json.loads(existing_files_raw or "[]"))
         if touched_files:
@@ -332,6 +371,17 @@ class EpisodicLayer(MemoryLayer):
             for c in commits:
                 if c not in existing_commits:
                     existing_commits.append(c)
+
+        # What the session did, taken from git rather than from anyone remembering
+        # to say: commits since it started and the files they changed. Their
+        # subjects become the summary a later prompt can find.
+        range_commits, range_files = _detect_git_range(head_before, cwd)
+        existing_files.update(range_files)
+        for chash, _subject in range_commits:
+            if chash not in existing_commits:
+                existing_commits.append(chash)
+        if not summary and range_commits:
+            summary = f"{len(range_commits)} commit(s): " + "; ".join(s for _h, s in range_commits[:8])
 
         _, cur_head = _detect_git_info(cwd)
 
@@ -574,7 +624,7 @@ class EpisodicLayer(MemoryLayer):
         per_term_args = [a for t in terms for a in (f"%{t}%",) * 3]
 
         def run(cur, joiner: str):
-            sql = ("SELECT session_id, project, goal, summary, started_at FROM episodic_sessions "
+            sql = ("SELECT session_id, project, goal, summary, started_at, touched_files, outcome FROM episodic_sessions "
                    "WHERE (" + joiner.join([clause] * len(terms)) + ")")
             args = list(per_term_args)
             if self.project:
@@ -605,12 +655,19 @@ class EpisodicLayer(MemoryLayer):
         con.close()
 
         hits = []
-        for sid, proj, goal, summary, started in rows:
-            blob = f"{goal or ''} {summary or ''}".lower()
+        for sid, proj, goal, summary, started, files_raw, outcome in rows:
+            try:
+                files = json.loads(files_raw or "[]")
+            except (json.JSONDecodeError, TypeError):
+                files = []
+            blob = f"{goal or ''} {summary or ''} {' '.join(files)}".lower()
             score = sum(1 for t in terms if t in blob) / len(terms)
+            files_str = ""
+            if files:
+                files_str = f" | Files: {', '.join(files[:5])}" + (f" (+{len(files) - 5})" if len(files) > 5 else "")
             hits.append(Hit(
-                text=f"[{proj}] Session {sid} ({started}): "
-                     f"Goal: {goal or '(none)'} | Summary: {summary or '(none)'}",
+                text=f"[{proj}] Session {sid} ({started}, {outcome or 'unknown'}): "
+                     f"Goal: {goal or '(none)'} | Summary: {summary or '(none)'}{files_str}",
                 source=self.name, ref=sid, score=round(score, 3)))
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[:limit]

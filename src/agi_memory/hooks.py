@@ -3,6 +3,8 @@
 
 Supported Lifecycle Events:
 - session-start: Proactive memory context injection (pinned core blocks + top precedents)
+- user-prompt-submit: Matching memories and past sessions pushed to the prompt; first prompt becomes the session goal
+- stop:          Asks the agent once for the why when a session changed code and recorded nothing
 - pre-compact:   Auto-promotion of L1 working memories into durable L2 graph before context compression
 - session-end:   Instant background Git sync and compaction
 - pre-commit:    Offline test suite and memory invariant validation
@@ -133,6 +135,10 @@ def hook_session_start(project: Optional[str] = None) -> None:
         except ImportError:
             from layers.session_layer import SessionLayer
             from layers.episodic_layer import EpisodicLayer
+        try:
+            from agi_memory.layers.episodic_layer import _detect_git_touched_files
+        except ImportError:
+            from layers.episodic_layer import _detect_git_touched_files
 
         l1 = SessionLayer(project=proj)
         pinned_blocks = l1.get_pinned_blocks(project=proj)
@@ -144,8 +150,11 @@ def hook_session_start(project: Optional[str] = None) -> None:
         if recent_sessions:
             session_count = len(recent_sessions)
             episodic_recap = EpisodicLayer.format_briefing(recent_sessions)
-        # Register new active session
-        ep.start_session(project=proj)
+        # Register new active session, noting files already dirty so the stop
+        # hook can tell this session's changes from ones it inherited.
+        sess = ep.start_session(project=proj)
+        ep.record_event(sess["session_id"], "git_status_at_start", "files dirty at start",
+                        details=_detect_git_touched_files(), project=proj)
     except Exception:
         pass
 
@@ -202,8 +211,10 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
     """
     try:
         from agi_memory.layers.session_layer import SessionLayer, STOPWORDS
+        from agi_memory.layers.episodic_layer import EpisodicLayer
     except ImportError:
         from layers.session_layer import SessionLayer, STOPWORDS
+        from layers.episodic_layer import EpisodicLayer
     text = prompt or ""
     # ponytail: 5-char prefixes stand in for stemming; FTS already stems the search itself.
     terms = {t[:5] for t in re.findall(r"[a-z0-9]+", text.lower())
@@ -215,44 +226,159 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
         return ""
     need = min(4, max(2, -(-len(terms) // 4)))
     proj = project or detect_project()
+    def overlaps(hit_text: str) -> bool:
+        return len(terms & {w[:5] for w in re.findall(r"[a-z0-9]+", hit_text.lower())}) >= need
+
+    # Past sessions first: "was this already done?" is answered by what a
+    # session did, however long ago -- the startup briefing only shows the
+    # last few. The current session is skipped; its goal is this prompt.
+    sessions: List[str] = []
     try:
-        layer = SessionLayer(db_path=db_path, project=proj)
-        hits = layer.search(text, limit=10)
+        ep = EpisodicLayer(db_path=db_path, project=proj)
+        current = ep.get_last_session(project=proj)
+        # ponytail: 50 recent OR-matches are scored, then gated; widen if a project outgrows it.
+        for h in ep.search(text, limit=50):
+            if current and h.ref == current["session_id"]:
+                continue
+            # A session with neither goal nor summary only matches through its
+            # file names (CLAUDE.md for "claude"), which says nothing about the work.
+            if "Goal: (none) | Summary: (none)" in h.text:
+                continue
+            if overlaps(h.text):
+                sessions.append(f"- Past session: {_clip(h.text, 300)}")
+            if len(sessions) == 2:
+                break
     except Exception:
-        return ""
+        pass
+
     shown: List[str] = []
     shown_ids: List[str] = []
-    for h in hits:
-        if h.text.startswith("[approximate") or "[SUPERSEDED" in h.text:
-            continue
-        if len(terms & {w[:5] for w in re.findall(r"[a-z0-9]+", h.text.lower())}) >= need:
-            shown.append(f"- {_clip(h.text, 300)}")
-            shown_ids.append(h.ref)
-        if len(shown) == _PROMPT_RECALL_LIMIT:
-            break
-    if not shown:
+    try:
+        layer = SessionLayer(db_path=db_path, project=proj)
+        for h in layer.search(text, limit=10):
+            if len(sessions) + len(shown) >= _PROMPT_RECALL_LIMIT:
+                break
+            if h.text.startswith("[approximate") or "[SUPERSEDED" in h.text:
+                continue
+            if overlaps(h.text):
+                shown.append(f"- {_clip(h.text, 300)}")
+                shown_ids.append(h.ref)
+        layer.mark_shown(shown_ids)
+    except Exception:
+        pass
+
+    if not sessions and not shown:
         return ""
-    layer.mark_shown(shown_ids)
     return "\n".join([
         "<!-- AGENT_MEMORY_PROMPT_RECALL -->",
-        f"Memories from agent-memory ({proj}) that match this prompt. "
-        "Check them before acting; call memory_recall for more. "
-        "If one shapes your work, cite its #id when you memory_record.",
+        f"Past work from agent-memory ({proj}) that matches this prompt. "
+        "Check it before acting; call memory_recall for more. "
+        "If a memory shapes your work, cite its #id when you memory_record.",
+        *sessions,
         *shown,
     ])
 
 
 def hook_user_prompt_submit(project: Optional[str] = None) -> None:
-    """UserPromptSubmit: push memories matching the prompt into context."""
+    """UserPromptSubmit: push matching past work; the first real prompt becomes the session goal."""
     sys.path.insert(0, str(REPO_DIR))
     raw = "" if sys.stdin.isatty() else sys.stdin.read()
     try:
         prompt = json.loads(raw).get("prompt") or ""
     except (json.JSONDecodeError, AttributeError):
         prompt = raw  # a harness that pipes the prompt text itself
-    out = prompt_recall(prompt, project)
+    proj = project or detect_project()
+    out = prompt_recall(prompt, proj)
     if out:
         print(out)
+    if prompt.strip() and not prompt.lstrip().startswith("/") and not _HARNESS_TURN.match(prompt):
+        try:
+            try:
+                from agi_memory.layers.episodic_layer import EpisodicLayer
+                from agi_memory.redact import redact
+            except ImportError:
+                from layers.episodic_layer import EpisodicLayer
+                from redact import redact
+            EpisodicLayer(project=proj).set_goal_if_empty(redact(" ".join(prompt.split())[:300]), project=proj)
+        except Exception:
+            pass
+
+
+def stop_decision(payload: Dict[str, Any], project: Optional[str] = None,
+                  db_path: Optional[Path] = None, cwd: Optional[str] = None) -> Optional[str]:
+    """Why the agent should record one memory before stopping, or None to let it stop.
+
+    Git says what a session changed; only the agent knows why. Ask once per
+    session, and only when it changed something and recorded nothing, so a
+    question-only session or an already-documented one stops untouched.
+    """
+    if payload.get("stop_hook_active"):
+        return None  # this stop already follows a block; never loop
+    try:
+        from agi_memory.layers.episodic_layer import EpisodicLayer, _detect_git_range, _detect_git_touched_files
+        from agi_memory.layers.base import open_db
+    except ImportError:
+        from layers.episodic_layer import EpisodicLayer, _detect_git_range, _detect_git_touched_files
+        from layers.base import open_db
+    proj = project or detect_project(Path(cwd) if cwd else None)
+    ep = EpisodicLayer(db_path=db_path, project=proj)
+    sess = ep.get_last_session(project=proj)
+    if not sess or sess["status"] != "active" or sess["outcome"] != "unknown":
+        return None
+    events = (ep.get_session(sess["session_id"]) or {}).get("events", [])
+    if any(e["event_type"] == "why_requested" for e in events):
+        return None
+    dirty_at_start: set = set()
+    for e in events:
+        if e["event_type"] == "git_status_at_start":
+            try:
+                dirty_at_start = set(json.loads(e["details"] or "[]"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+    commits, _files = _detect_git_range(sess["git_head_before"], cwd)
+    changed = set(_detect_git_touched_files(cwd)) - dirty_at_start
+    if not commits and not changed:
+        return None
+    projects = ("agi-memory", "agent-memory") if proj in ("agi-memory", "agent-memory") else (proj,)
+    recorded = 0
+    try:
+        con = open_db(ep.db_path, readonly=True)
+        try:
+            recorded = con.execute(
+                f"SELECT COUNT(*) FROM observations WHERE project IN ({','.join('?' for _ in projects)}) "
+                "AND subtitle LIKE 'Recorded via agent-memory%' AND title NOT LIKE 'Git commit:%' "
+                "AND created_at_epoch >= CAST(strftime('%s', ?) AS INTEGER) * 1000",
+                (*projects, sess["started_at"])).fetchone()[0]
+        finally:
+            con.close()
+    except Exception:
+        recorded = 0  # no observations table yet: nothing was recorded
+    if recorded:
+        return None
+    ep.record_event(sess["session_id"], "why_requested", "asked for a memory before stopping", project=proj)
+    did = f"made {len(commits)} commit(s)" if commits else f"changed {len(changed)} file(s)"
+    return (f"Before you stop: this session {did} but recorded no memory. If it settled a decision "
+            "or fixed a non-trivial bug, call memory_record once with its rationale, citing any recalled "
+            "#id that shaped it. Then call memory_session_outcome (completed, abandoned, blocked or "
+            "superseded). If nothing here is worth keeping, say so in one line and stop.")
+
+
+def hook_stop(project: Optional[str] = None) -> None:
+    """Stop: ask once for the why behind a session's changes (Claude Code blocks with a reason)."""
+    sys.path.insert(0, str(REPO_DIR))
+    raw = "" if sys.stdin.isatty() else sys.stdin.read()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        reason = stop_decision(payload, project, cwd=payload.get("cwd"))
+    except Exception:
+        reason = None  # a memory hook's own error must never keep an agent from stopping
+    if reason:
+        print(json.dumps({"decision": "block", "reason": reason}))
 
 
 def hook_pre_compact(project: Optional[str] = None) -> None:
@@ -285,14 +411,32 @@ def hook_session_end(project: Optional[str] = None) -> None:
     except Exception:
         pass
 
+    # The git pull/push takes seconds over the network, and Claude Code cancels a
+    # SessionEnd hook still running when it exits ("Hook cancelled"). Closing the
+    # session above is fast; the sync runs in its own process that outlives this one.
+    try:
+        _spawn_detached([sys.executable, str(Path(__file__).resolve()), "vault-sync"])
+    except Exception:
+        pass
+
+
+def _spawn_detached(args: List[str]) -> None:
+    """Start a process that outlives this one, with no pipes back to it."""
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) \
+        if os.name == "nt" else 0
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=os.name != "nt", creationflags=flags)
+
+
+def hook_vault_sync() -> None:
+    """Pull and push the vault; run detached by session-end."""
+    sys.path.insert(0, str(REPO_DIR))
     try:
         try:
             from agi_memory import sync
         except ImportError:
             import sync
-        res = sync.sync(push=True, pull=True)
-        if res.get("status") == "ok":
-            print("[agent-memory] SessionEnd: Synced memory vault with remote.")
+        sync.sync(push=True, pull=True)
     except Exception:
         pass
 
@@ -467,6 +611,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     cmd_compact = f'"{py}" "{hooks_py}" pre-compact'
     cmd_end = f'"{py}" "{hooks_py}" session-end'
     cmd_prompt = f'"{py}" "{hooks_py}" user-prompt-submit'
+    cmd_stop = f'"{py}" "{hooks_py}" stop'
 
     def _is_memory_hook(entry: Dict[str, Any]) -> bool:
         return any(
@@ -478,7 +623,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
         )
 
     # Purge any previous or stale memory hooks to eliminate duplicates or broken paths
-    for ev in ("SessionStart", "PreCompact", "SessionEnd", "UserPromptSubmit"):
+    for ev in ("SessionStart", "PreCompact", "SessionEnd", "UserPromptSubmit", "Stop"):
         if ev in hooks:
             hooks[ev] = [e for e in hooks[ev] if not _is_memory_hook(e)]
 
@@ -500,6 +645,7 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     _ensure_hook("PreCompact", cmd_compact)
     _ensure_hook("SessionEnd", cmd_end)
     _ensure_hook("UserPromptSubmit", cmd_prompt)
+    _ensure_hook("Stop", cmd_stop)
 
     # Sanitize and ensure Claude Code permission format (mcp__<server>__*)
     perms = data.get("permissions", {})
@@ -826,6 +972,11 @@ def main() -> None:
     p_prompt = subparsers.add_parser("user-prompt-submit", help="Inject memories matching the prompt (JSON or text on stdin)")
     p_prompt.add_argument("--project", "-p", help="Project name override")
 
+    p_stop = subparsers.add_parser("stop", help="Ask once for the why behind a session's changes (JSON on stdin)")
+    p_stop.add_argument("--project", "-p", help="Project name override")
+
+    subparsers.add_parser("vault-sync", help="Pull and push the memory vault (session-end runs this detached)")
+
     p_compact = subparsers.add_parser("pre-compact", help="Promote high-signal L1 memories before compaction")
     p_compact.add_argument("--project", "-p", help="Project name override")
 
@@ -853,6 +1004,10 @@ def main() -> None:
         hook_session_start(getattr(args, "project", None))
     elif args.action == "user-prompt-submit":
         hook_user_prompt_submit(getattr(args, "project", None))
+    elif args.action == "stop":
+        hook_stop(getattr(args, "project", None))
+    elif args.action == "vault-sync":
+        hook_vault_sync()
     elif args.action == "pre-compact":
         hook_pre_compact(getattr(args, "project", None))
     elif args.action == "session-end":

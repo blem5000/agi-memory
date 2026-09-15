@@ -1602,6 +1602,81 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _us_tmp:
     _vault_rd.import_from_vault(vault_dir=_us_v, session_db=_us_db, graph_db=_us_db, replace=True)
     assert _us_sl.usage_summary(project="us-proj") == {"shown": 1, "shows": 1, "cited": 1}, "counts must survive a rebuild"
 
+# 10o. A session records what it did from git, its first real prompt becomes its
+# goal, a later prompt finds it however many sessions ago it was, and the stop
+# hook asks for the why exactly once, only when a session changed something and
+# recorded nothing.
+import subprocess as _sp_cap
+from agi_memory.layers.episodic_layer import EpisodicLayer as _EL_cap
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _cap_tmp:
+    _repo = Path(_cap_tmp) / "repo"
+    _repo.mkdir()
+
+    def _git(*_args):
+        _sp_cap.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *_args],
+                    cwd=_repo, check=True, capture_output=True)
+    _git("init", "-q")
+    (_repo / "base.py").write_text("x = 1\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "chore: base")
+    _cap_db = Path(_cap_tmp) / "c.db"
+    _cap_ep = _EL_cap(db_path=_cap_db, project="cap-proj")
+    _cap_ep.start_session(project="cap-proj", cwd=_repo)
+    assert _cap_ep.set_goal_if_empty("tune the webhook retry cap", project="cap-proj")
+    assert not _cap_ep.set_goal_if_empty("a later prompt", project="cap-proj"), "only the first prompt is the goal"
+    (_repo / "webhooks.py").write_text("RETRY_CAP = 5\n")
+    _git("add", "-A")
+    _git("commit", "-qm", "fix: cap payment webhook retries at five")
+    _ended = _cap_ep.end_session(project="cap-proj", cwd=_repo)
+    assert "cap payment webhook retries" in _ended["summary"] and "webhooks.py" in _ended["touched_files"], _ended
+
+    # Ten unrelated sessions later, a prompt about the same work still finds it.
+    for _ in range(10):
+        _cap_ep.start_session(project="cap-proj", cwd=_repo)
+        _cap_ep.set_goal_if_empty("polish the settings screen layout", project="cap-proj")
+        _cap_ep.end_session(project="cap-proj", cwd=_repo)
+    _cap_ep.start_session(project="cap-proj", cwd=_repo)
+    _cap_out = _hk_pr.prompt_recall("payment webhook retries keep failing", "cap-proj", _cap_db)
+    assert "Past session" in _cap_out and "cap payment webhook retries" in _cap_out, _cap_out
+    assert "settings screen" not in _cap_out, _cap_out
+
+    # Stop: nothing changed -> stops untouched; a commit with nothing recorded ->
+    # asked once; an already-blocked stop never loops.
+    assert _hk_pr.stop_decision({}, "cap-proj", _cap_db, str(_repo)) is None, "nothing changed yet"
+    (_repo / "webhooks.py").write_text("RETRY_CAP = 3\n")
+    _git("commit", "-qam", "fix: lower the retry cap")
+    assert _hk_pr.stop_decision({"stop_hook_active": True}, "cap-proj", _cap_db, str(_repo)) is None
+    _cap_reason = _hk_pr.stop_decision({}, "cap-proj", _cap_db, str(_repo))
+    assert _cap_reason and "memory_record" in _cap_reason, _cap_reason
+    assert _hk_pr.stop_decision({}, "cap-proj", _cap_db, str(_repo)) is None, "asked once per session"
+
+    # A session that already recorded its why is not asked.
+    _cap_ep.start_session(project="cap-proj", cwd=_repo)
+    (_repo / "webhooks.py").write_text("RETRY_CAP = 4\n")
+    _git("commit", "-qam", "fix: settle the retry cap at four")
+    SessionLayer(db_path=_cap_db, project="cap-proj").record(
+        "Retry cap is 4: the provider bans endpoints after 5", title="Retry cap", project="cap-proj",
+        rationale="provider ban threshold")
+    assert _hk_pr.stop_decision({}, "cap-proj", _cap_db, str(_repo)) is None
+
+# 10p. session-end returns fast: Claude Code cancels a SessionEnd hook still
+# running when it exits, which cut the seconds-long vault sync ("Hook
+# cancelled"). The sync is handed to a detached process, never run inline.
+from agi_memory import sync as _sync_se
+_se_spawned = []
+_se_real_spawn, _se_real_sync = _hk_pr._spawn_detached, _sync_se.sync
+
+
+def _se_inline_sync(**_kw):
+    raise AssertionError("session-end ran the vault sync inline")
+_hk_pr._spawn_detached = _se_spawned.append
+_sync_se.sync = _se_inline_sync
+try:
+    _hk_pr.hook_session_end("se-proj")
+finally:
+    _hk_pr._spawn_detached, _sync_se.sync = _se_real_spawn, _se_real_sync
+assert len(_se_spawned) == 1 and _se_spawned[0][-1] == "vault-sync", _se_spawned
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)

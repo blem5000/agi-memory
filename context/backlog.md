@@ -1083,6 +1083,22 @@ does not change ranking yet: citations are sparse, so demoting shown-but-uncited
 memories now would demote good ones that nobody happened to cite. Revisit with
 a week of data. `memory_recall_deep` does not mark shows.
 
+**Session capture and the why, done (2026-09-15).** All 49 real sessions had no
+goal and no summary, so "we did this 10 sessions ago" could not be found: the
+briefing shows only the last 3, and no recall path searched sessions.
+- The first real prompt becomes the session goal (prompt hook, redacted).
+- `end_session` adds commits made and files changed since `git_head_before`,
+  and writes the commit subjects as the summary.
+- The prompt hook lists up to 2 past sessions that share several words with
+  the prompt, excluding the current one, ahead of matching memories (3 total).
+- Claude Code `Stop` hook: when a session committed or changed files it did not
+  start with, and recorded no memory, the agent is asked once to record the why
+  and set the outcome. `stop_hook_active` prevents a loop. Not wired for other
+  assistants; the server instructions carry the same request.
+- Known limits: the current session is "the latest active one for the
+  project", so two concurrent sessions in one repo can be confused; sessions
+  started before this change stay empty.
+
 **Vault history, done (2026-09-15):** squashed to one commit and force-pushed;
 no reachable object holds a Google key. The pre-rewrite history is kept as a
 local git bundle. Another machine with an old clone cannot push it back (its
