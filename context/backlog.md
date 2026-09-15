@@ -1095,9 +1095,23 @@ briefing shows only the last 3, and no recall path searched sessions.
   start with, and recorded no memory, the agent is asked once to record the why
   and set the outcome. `stop_hook_active` prevents a loop. Not wired for other
   assistants; the server instructions carry the same request.
-- Known limits: the current session is "the latest active one for the
-  project", so two concurrent sessions in one repo can be confused; sessions
-  started before this change stay empty.
+- Known limits: sessions started before this change stay empty.
+
+**Leftover `active` rows, causes verified (2026-09-15).** 28 of 80 rows were
+`active`. Verified sources, and fixes:
+- Antigravity runs `session-start` from `PreInvocation`, before every model
+  invocation: 12 step folders of one conversation were created at the same
+  seconds as 12 rows. Fix: installed as `session-start --reuse`.
+- The OpenCode plugin set the goal in `chat.message` before registering the
+  session in `system.transform`, so prompts became goals of older rows (two
+  OpenCode prompts matched to rows 73 and 66). Fix: register first, pass
+  OpenCode's session id.
+- Goal, stop and end picked "the latest active row". Fix: Claude Code (verified
+  payload: session_id on SessionStart, UserPromptSubmit, Stop, SessionEnd) and
+  OpenCode key rows by their own id; an unknown id changes nothing.
+- Not explained: 5 of the Sep 14 home-folder rows, and 9 `flutter_tvlr_app`
+  rows 08:40-08:43 UTC Sep 15 (no OpenCode, Claude Code or Codex activity found
+  in that window). Existing leftover rows were not modified.
 
 **Vault history, done (2026-09-15):** squashed to one commit and force-pushed;
 no reachable object holds a Google key. The pre-rewrite history is kept as a

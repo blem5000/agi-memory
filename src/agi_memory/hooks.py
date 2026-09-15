@@ -111,6 +111,31 @@ def ensure_hooks_dir() -> Path:
 _PREVIEW_CHARS = 400
 
 
+def _read_hook_payload(wait: float = 0.5) -> Dict[str, Any]:
+    """The JSON a harness pipes to a hook, or {}.
+
+    Claude Code sends one on every event (session_id, cwd, prompt, ...). A caller
+    that sends nothing may still leave stdin open -- Bun's shell does -- where a
+    plain read() hangs the hook, so POSIX waits at most `wait` seconds for data.
+    """
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    if os.name != "nt":
+        # ponytail: Windows cannot select() on a pipe; a caller there that leaves stdin open would block.
+        import select
+        try:
+            if not select.select([sys.stdin], [], [], wait)[0]:
+                return {}
+        except (OSError, ValueError):
+            return {}
+    raw = sys.stdin.read()
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        return {"prompt": raw}  # a harness that pipes the prompt text itself
+    return data if isinstance(data, dict) else {}
+
+
 def _clip(text: str, limit: int = _PREVIEW_CHARS) -> str:
     text = " ".join(text.split())
     if len(text) <= limit:
@@ -118,8 +143,18 @@ def _clip(text: str, limit: int = _PREVIEW_CHARS) -> str:
     return text[:limit].rsplit(" ", 1)[0] + " ... (truncated -- inspect for full text)"
 
 
-def hook_session_start(project: Optional[str] = None) -> None:
-    """SessionStart / PreInvocation: Inject pinned blocks, precedents, and episodic recap into context."""
+def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> None:
+    """SessionStart / PreInvocation: Inject pinned blocks, precedents, and episodic recap into context.
+
+    The episodic row is keyed by the harness's own session id when it sends one,
+    so a resume reopens the same row instead of adding another. `reuse` is for
+    harnesses that run this before every model invocation and send no id
+    (Antigravity): an active session for the project from the last 12 hours is
+    kept, and the briefing is not injected again. Without it, Antigravity opened
+    one row per step -- 12 rows in 50 seconds for one conversation.
+    """
+    payload = _read_hook_payload()
+    sid = payload.get("session_id") or None
     proj = project or detect_project()
     sys.path.insert(0, str(REPO_DIR))
 
@@ -136,25 +171,32 @@ def hook_session_start(project: Optional[str] = None) -> None:
             from layers.session_layer import SessionLayer
             from layers.episodic_layer import EpisodicLayer
         try:
-            from agi_memory.layers.episodic_layer import _detect_git_touched_files
+            from agi_memory.layers.episodic_layer import _detect_git_touched_files, started_within
         except ImportError:
-            from layers.episodic_layer import _detect_git_touched_files
+            from layers.episodic_layer import _detect_git_touched_files, started_within
+
+        ep = EpisodicLayer(project=proj)
+        if reuse and not sid:
+            last = ep.get_last_session(project=proj)
+            if last and last["status"] == "active" and started_within(last["started_at"], 12):
+                return
 
         l1 = SessionLayer(project=proj)
         pinned_blocks = l1.get_pinned_blocks(project=proj)
         hits = l1.search("architecture convention pattern decision rule invariant", limit=3)
         recent_hits = [h.text for h in hits]
 
-        ep = EpisodicLayer(project=proj)
         recent_sessions = ep.get_timeline(project=proj, limit=3)
         if recent_sessions:
             session_count = len(recent_sessions)
             episodic_recap = EpisodicLayer.format_briefing(recent_sessions)
         # Register new active session, noting files already dirty so the stop
         # hook can tell this session's changes from ones it inherited.
-        sess = ep.start_session(project=proj)
-        ep.record_event(sess["session_id"], "git_status_at_start", "files dirty at start",
-                        details=_detect_git_touched_files(), project=proj)
+        resumed = bool(sid and ep.get_session(sid))
+        sess = ep.start_session(session_id=sid, project=proj)
+        if not resumed:  # a resume keeps the first snapshot, or its own edits would look inherited
+            ep.record_event(sess["session_id"], "git_status_at_start", "files dirty at start",
+                            details=_detect_git_touched_files(), project=proj)
     except Exception:
         pass
 
@@ -199,7 +241,8 @@ _PROMPT_FILLER = frozenset(
     "have your there here them they then than when".split())
 
 
-def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[Path] = None) -> str:
+def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[Path] = None,
+                  session_id: Optional[str] = None) -> str:
     """Memories that match a user's prompt closely enough to show unasked.
 
     Agents almost never call memory_recall themselves: 0 calls in the 146
@@ -235,10 +278,10 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
     sessions: List[str] = []
     try:
         ep = EpisodicLayer(db_path=db_path, project=proj)
-        current = ep.get_last_session(project=proj)
+        current_id = session_id or (ep.get_last_session(project=proj) or {}).get("session_id")
         # ponytail: 50 recent OR-matches are scored, then gated; widen if a project outgrows it.
         for h in ep.search(text, limit=50):
-            if current and h.ref == current["session_id"]:
+            if h.ref == current_id:
                 continue
             # A session with neither goal nor summary only matches through its
             # file names (CLAUDE.md for "claude"), which says nothing about the work.
@@ -282,13 +325,11 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
 def hook_user_prompt_submit(project: Optional[str] = None) -> None:
     """UserPromptSubmit: push matching past work; the first real prompt becomes the session goal."""
     sys.path.insert(0, str(REPO_DIR))
-    raw = "" if sys.stdin.isatty() else sys.stdin.read()
-    try:
-        prompt = json.loads(raw).get("prompt") or ""
-    except (json.JSONDecodeError, AttributeError):
-        prompt = raw  # a harness that pipes the prompt text itself
+    payload = _read_hook_payload()
+    prompt = str(payload.get("prompt") or "")
+    sid = payload.get("session_id") or None
     proj = project or detect_project()
-    out = prompt_recall(prompt, proj)
+    out = prompt_recall(prompt, proj, session_id=sid)
     if out:
         print(out)
     if prompt.strip() and not prompt.lstrip().startswith("/") and not _HARNESS_TURN.match(prompt):
@@ -299,7 +340,8 @@ def hook_user_prompt_submit(project: Optional[str] = None) -> None:
             except ImportError:
                 from layers.episodic_layer import EpisodicLayer
                 from redact import redact
-            EpisodicLayer(project=proj).set_goal_if_empty(redact(" ".join(prompt.split())[:300]), project=proj)
+            EpisodicLayer(project=proj).set_goal_if_empty(redact(" ".join(prompt.split())[:300]), project=proj,
+                                                          session_id=sid)
         except Exception:
             pass
 
@@ -322,7 +364,10 @@ def stop_decision(payload: Dict[str, Any], project: Optional[str] = None,
         from layers.base import open_db
     proj = project or detect_project(Path(cwd) if cwd else None)
     ep = EpisodicLayer(db_path=db_path, project=proj)
-    sess = ep.get_last_session(project=proj)
+    sid = payload.get("session_id")
+    # With an id, only that session counts: an unknown id means this session was
+    # never registered, and guessing "the latest active row" asked about another.
+    sess = ep.get_session(sid) if sid else ep.get_last_session(project=proj)
     if not sess or sess["status"] != "active" or sess["outcome"] != "unknown":
         return None
     events = (ep.get_session(sess["session_id"]) or {}).get("events", [])
@@ -366,13 +411,7 @@ def stop_decision(payload: Dict[str, Any], project: Optional[str] = None,
 def hook_stop(project: Optional[str] = None) -> None:
     """Stop: ask once for the why behind a session's changes (Claude Code blocks with a reason)."""
     sys.path.insert(0, str(REPO_DIR))
-    raw = "" if sys.stdin.isatty() else sys.stdin.read()
-    try:
-        payload = json.loads(raw) if raw.strip() else {}
-    except json.JSONDecodeError:
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
+    payload = _read_hook_payload()
     try:
         reason = stop_decision(payload, project, cwd=payload.get("cwd"))
     except Exception:
@@ -399,6 +438,8 @@ def hook_pre_compact(project: Optional[str] = None) -> None:
 
 def hook_session_end(project: Optional[str] = None) -> None:
     """SessionEnd / Stop: Finalize episodic session, commit vault, and trigger background sync."""
+    payload = _read_hook_payload()
+    sid = payload.get("session_id") or None
     proj = project or detect_project()
     sys.path.insert(0, str(REPO_DIR))
     try:
@@ -407,7 +448,10 @@ def hook_session_end(project: Optional[str] = None) -> None:
         except ImportError:
             from layers.episodic_layer import EpisodicLayer
         ep = EpisodicLayer(project=proj)
-        ep.end_session(project=proj)
+        if not sid:
+            ep.end_session(project=proj)
+        elif ep.get_session(sid):  # an unregistered id must not close another session's row
+            ep.end_session(session_id=sid, project=proj)
     except Exception:
         pass
 
@@ -704,7 +748,8 @@ def install_agy_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool, s
         except Exception:
             data = {}
 
-    cmd_start = f'"{py}" "{hooks_py}" session-start'
+    # PreInvocation runs before every model invocation, not once per conversation.
+    cmd_start = f'"{py}" "{hooks_py}" session-start --reuse'
     cmd_end = f'"{py}" "{hooks_py}" session-end'
 
     data["agent-memory"] = {
@@ -770,6 +815,7 @@ export const AgentMemoryPlugin = async ({ $ }) => {
   const PY = "@@PY@@";
   const HOOKS_PY = "@@HOOKS_PY@@";
   const seen = new Set();
+  const started = new Map();
   const recalled = new Map();
 
   const run = async (verb, stdin) => {
@@ -783,16 +829,26 @@ export const AgentMemoryPlugin = async ({ $ }) => {
     }
   };
 
+  const startOnce = async (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const ctx = await run("session-start", JSON.stringify({ session_id: id }));
+    if (ctx) started.set(id, ctx);
+  };
+
   return {
     // Read-only here: the parts are persisted after this hook, so the matches
     // travel through the system prompt instead of as synthetic message parts.
     "chat.message": async (input, output) => {
       const id = (input && input.sessionID) || "default";
+      // Register the session before its prompt: the prompt sets the session's
+      // goal, and registering later put goals onto older sessions' rows.
+      await startOnce(id);
       const text = ((output && output.parts) || [])
         .filter((p) => p && p.type === "text" && !p.synthetic)
         .map((p) => p.text)
         .join("\\n");
-      const ctx = text ? await run("user-prompt-submit", JSON.stringify({ prompt: text })) : "";
+      const ctx = text ? await run("user-prompt-submit", JSON.stringify({ prompt: text, session_id: id })) : "";
       if (ctx) recalled.set(id, ctx);
       else recalled.delete(id);
     },
@@ -800,10 +856,11 @@ export const AgentMemoryPlugin = async ({ $ }) => {
     // a silent no-op on the OpenCode side.
     "experimental.chat.system.transform": async (input, output) => {
       const id = (input && input.sessionID) || "default";
-      if (!seen.has(id)) {
-        seen.add(id);
-        const ctx = await run("session-start");
-        if (ctx) output.system.push(ctx);
+      await startOnce(id);
+      const briefing = started.get(id);
+      if (briefing) {
+        output.system.push(briefing);
+        started.delete(id);
       }
       const recall = recalled.get(id);
       if (recall) output.system.push(recall);
@@ -968,6 +1025,8 @@ def main() -> None:
     # Lifecycle event commands
     p_start = subparsers.add_parser("session-start", help="Inject active context and precedents")
     p_start.add_argument("--project", "-p", help="Project name override")
+    p_start.add_argument("--reuse", action="store_true",
+                         help="Keep an active session from the last 12h (hooks that fire per model invocation)")
 
     p_prompt = subparsers.add_parser("user-prompt-submit", help="Inject memories matching the prompt (JSON or text on stdin)")
     p_prompt.add_argument("--project", "-p", help="Project name override")
@@ -1001,7 +1060,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.action == "session-start":
-        hook_session_start(getattr(args, "project", None))
+        hook_session_start(getattr(args, "project", None), reuse=getattr(args, "reuse", False))
     elif args.action == "user-prompt-submit":
         hook_user_prompt_submit(getattr(args, "project", None))
     elif args.action == "stop":

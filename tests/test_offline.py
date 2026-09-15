@@ -1677,6 +1677,31 @@ finally:
     _hk_pr._spawn_detached, _sync_se.sync = _se_real_spawn, _se_real_sync
 assert len(_se_spawned) == 1 and _se_spawned[0][-1] == "vault-sync", _se_spawned
 
+# 10q. Hooks key episodic rows to the harness's own session id. "The latest
+# active row" put one tool's prompt onto another session's row, and a hook that
+# fires per model invocation (Antigravity) opened a row per step.
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _sid_tmp:
+    _sid_db = Path(_sid_tmp) / "s.db"
+    _sid_ep = _EL_cap(db_path=_sid_db, project="sid-proj")
+    _sid_ep.start_session(session_id="claude-A", project="sid-proj")
+    _sid_ep.start_session(session_id="claude-B", project="sid-proj")  # B is now the latest active row
+    assert _sid_ep.set_goal_if_empty("goal for A", project="sid-proj", session_id="claude-A")
+    assert _sid_ep.get_session("claude-A")["goal"] == "goal for A"
+    assert _sid_ep.get_session("claude-B")["goal"] == "", "another session's prompt must not reach B"
+    assert not _sid_ep.set_goal_if_empty("stray", project="sid-proj", session_id="never-registered")
+    assert _sid_ep.get_session("claude-B")["goal"] == "", "an unknown id must not fall back to the latest row"
+    assert _hk_pr.stop_decision({"session_id": "never-registered"}, "sid-proj", _sid_db, _sid_tmp) is None
+    _sid_ep.end_session(session_id="claude-A", project="sid-proj")
+    _sid_ep.start_session(session_id="claude-A", project="sid-proj")  # resume
+    assert _sid_ep.get_session("claude-A")["status"] == "active", "a resume reopens its own row"
+    assert sum(s["session_id"] == "claude-A" for s in _sid_ep.get_timeline(project="sid-proj", limit=20)) == 1
+
+_rs_ep = _EL_cap(project="reuse-proj")
+_rs_before = len(_rs_ep.get_timeline(project="reuse-proj", limit=50))
+_hk_pr.hook_session_start("reuse-proj", reuse=True)
+_hk_pr.hook_session_start("reuse-proj", reuse=True)
+assert len(_rs_ep.get_timeline(project="reuse-proj", limit=50)) == _rs_before + 1, "per-invocation hook opened a row per step"
+
 # 11. Test Modularity, Config SSoT, and Event Listener Decoupling
 with tempfile.TemporaryDirectory() as mod_tmp:
     m_dir = Path(mod_tmp)

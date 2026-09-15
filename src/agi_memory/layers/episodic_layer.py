@@ -120,6 +120,16 @@ def _detect_git_range(before: Optional[str], cwd: Path | str | None = None) -> T
     return commits, [n for n in names.splitlines() if n]
 
 
+def started_within(started_at, hours: float = 12) -> bool:
+    """Whether a session began within the last `hours`. started_at is SQLite CURRENT_TIMESTAMP (UTC)."""
+    import datetime as _dt
+    try:
+        started = _dt.datetime.strptime(str(started_at)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_dt.timezone.utc)
+    except ValueError:
+        return False
+    return _dt.datetime.now(_dt.timezone.utc) - started < _dt.timedelta(hours=hours)
+
+
 # Question words carry no retrieval signal but would AND away every match.
 _STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "do", "did", "does", "what",
@@ -228,6 +238,8 @@ class EpisodicLayer(MemoryLayer):
                 session_id, project, goal, git_branch, git_head_before, git_head_after, status
             ) VALUES (?, ?, ?, ?, ?, ?, 'active')
             ON CONFLICT(session_id) DO UPDATE SET
+                status = 'active',
+                ended_at = NULL,
                 goal = CASE WHEN excluded.goal != '' THEN excluded.goal ELSE goal END,
                 git_branch = coalesce(excluded.git_branch, git_branch),
                 git_head_after = coalesce(excluded.git_head_after, git_head_after)
@@ -249,11 +261,15 @@ class EpisodicLayer(MemoryLayer):
             "status": row[7],
         }
 
-    def set_goal_if_empty(self, goal: str, project: Optional[str] = None) -> bool:
-        """Give the latest active session its goal, once.
+    def set_goal_if_empty(self, goal: str, project: Optional[str] = None,
+                          session_id: Optional[str] = None) -> bool:
+        """Give a session its goal, once.
 
         Every real session had an empty goal: nothing ever set one. The first
-        prompt of a session says what it was for, so it is the goal.
+        prompt of a session says what it was for, so it is the goal. With a
+        session_id only that session is touched -- an unknown id changes
+        nothing, because "the latest active session" put prompts onto leftover
+        rows from other sessions. Without one, the latest active session is used.
         """
         goal = (goal or "").strip()
         if not goal:
@@ -261,6 +277,12 @@ class EpisodicLayer(MemoryLayer):
         proj = project or self.project or "global"
         con = self._get_con()
         try:
+            if session_id:
+                cur = con.execute(
+                    "UPDATE episodic_sessions SET goal = ? WHERE session_id = ? AND COALESCE(goal, '') = ''",
+                    (goal, session_id))
+                con.commit()
+                return cur.rowcount > 0
             cur = con.execute("""
                 UPDATE episodic_sessions SET goal = ?
                 WHERE id = (SELECT id FROM episodic_sessions WHERE project = ? AND status = 'active'
