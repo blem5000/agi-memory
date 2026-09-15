@@ -1577,6 +1577,8 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _pr_tmp:
     _pr_sl.record("Explain how retries work in this code.", title="How this works", project="pr-proj")
     assert _hk_pr.prompt_recall("can you explain how this works", "pr-proj", _pr_db) == ""
     assert _hk_pr.prompt_recall("/compact", "pr-proj", _pr_db) == ""
+    assert _hk_pr.prompt_recall("<system-reminder>background task finished: payment webhook retries "
+                                "</system-reminder>", "pr-proj", _pr_db) == "", "harness turns are not prompts"
     assert _hk_pr.prompt_recall("webhook documentation for the billing export pipeline", "pr-proj", _pr_db) == "", \
         "one shared word must not be enough"
 assert "memory_recall" in _ms_rat.SERVER_INSTRUCTIONS

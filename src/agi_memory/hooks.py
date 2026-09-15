@@ -181,6 +181,7 @@ def hook_session_start(project: Optional[str] = None) -> None:
 
 
 _PROMPT_RECALL_LIMIT = 3
+_HARNESS_TURN = re.compile(r"\s*<(task-notification|system-reminder|local-command|command-name|command-message)\b")
 # Conversational words that match thousands of memories and mean nothing here:
 # "can you explain how this works" pulled in two unrelated commits without this.
 _PROMPT_FILLER = frozenset(
@@ -207,7 +208,10 @@ def prompt_recall(prompt: str, project: Optional[str] = None, db_path: Optional[
     # ponytail: 5-char prefixes stand in for stemming; FTS already stems the search itself.
     terms = {t[:5] for t in re.findall(r"[a-z0-9]+", text.lower())
              if len(t) > 3 and t not in STOPWORDS and t not in _PROMPT_FILLER}
-    if len(terms) < 2 or text.lstrip().startswith("/"):
+    # Harness-generated turns (a background task finishing, a local command's
+    # output) arrive through the same prompt event; matching them injected
+    # unrelated memories into a turn nobody typed.
+    if len(terms) < 2 or text.lstrip().startswith("/") or _HARNESS_TURN.match(text):
         return ""
     need = min(4, max(2, -(-len(terms) // 4)))
     proj = project or detect_project()
