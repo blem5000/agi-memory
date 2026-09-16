@@ -24,7 +24,7 @@ except ImportError:
         from ..config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
         from .base import Hit, MemoryLayer, open_db, stem_terms
     except (ImportError, ValueError):
-        from config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
+        from config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         # Script mode is how every lifecycle hook runs. Omitting open_db here
         # made EpisodicLayer() raise NameError inside the hooks' bare except,
         # so no real session was ever recorded.

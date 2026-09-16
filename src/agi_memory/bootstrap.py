@@ -19,10 +19,10 @@ try:
     from agi_memory.layers.session_layer import SessionLayer
 except ImportError:
     try:
-        from config import get_default_db, hidden_subprocess_kwargs
+        from config import get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         from layers.session_layer import SessionLayer
     except ImportError:
-        from .config import get_default_db, hidden_subprocess_kwargs
+        from .config import get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         from .layers.session_layer import SessionLayer
 
 

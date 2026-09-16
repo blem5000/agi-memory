@@ -796,9 +796,9 @@ def _spawn_detached_check(vault_dir: Path | str | None = None) -> bool:
         except Exception:
             _cwd = None
         kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL,
-                                  "stdout": subprocess.DEVNULL,
-                                  "stderr": subprocess.DEVNULL,
-                                  "env": env, "close_fds": True}
+                                   "stdout": subprocess.DEVNULL,
+                                   "stderr": subprocess.DEVNULL,
+                                   "env": env, "close_fds": True}
         if _cwd:
             kwargs["cwd"] = _cwd
         if os.name == "nt":
