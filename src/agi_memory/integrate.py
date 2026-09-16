@@ -47,6 +47,15 @@ if hasattr(sys.stdout, "reconfigure"):
 REPO_DIR = Path(__file__).resolve().parent
 DEFAULT_SERVER = REPO_DIR / "mcp_server.py"
 
+try:
+    from agi_memory.config import hidden_subprocess_kwargs
+except ImportError:
+    try:
+        from config import hidden_subprocess_kwargs  # type: ignore[no-redef]
+    except ImportError:
+        def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:  # type: ignore[misc]
+            return {}
+
 MEMORY_RULES_MD = """<!-- AGENT_MEMORY_DISCIPLINE_START -->
 # Agent Memory Discipline (agent-memory MCP)
 
@@ -1350,7 +1359,8 @@ def cmd_test(args: argparse.Namespace) -> None:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            **hidden_subprocess_kwargs()
         )
     except Exception as e:
         print(f"  [✗] Failed to spawn MCP server process: {e}")
