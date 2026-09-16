@@ -19,14 +19,29 @@ permissions:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    if: >
-      github.event.workflow_run.conclusion == 'failure' &&
-      secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+    # NOTE: `secrets.*` cannot be used in a job-level `if` (GitHub does not
+    # expose the secrets context there), so the secrets check lives in the
+    # `gate` step below and the real steps are conditional on its output.
+    if: github.event.workflow_run.conclusion == 'failure'
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      - name: Check notifier secrets
+        id: gate
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "do_notify=false" >> "$GITHUB_OUTPUT"
+            echo "Telegram secrets not configured; skipping notification."
+          else
+            echo "do_notify=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Collect failure context
         id: ctx
+        if: steps.gate.outputs.do_notify == 'true'
         run: |
           set -euo pipefail
           RUN_ID="${{ github.event.workflow_run.id }}"
@@ -49,6 +64,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: Send Telegram message
+        if: steps.gate.outputs.do_notify == 'true'
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
