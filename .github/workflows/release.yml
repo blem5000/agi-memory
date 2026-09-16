@@ -188,6 +188,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create ${{ github.ref_name }} dist/* \
-            --title "Release ${{ github.ref_name }}" \
-            --generate-notes
+          # Idempotent: a release for this tag may already exist (created
+          # manually or by a re-run). gh release create fails hard in that
+          # case, so attach the dist assets to the existing release instead.
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists; uploading assets."
+            gh release upload "${{ github.ref_name }}" dist/* --clobber
+          else
+            gh release create "${{ github.ref_name }}" dist/* \
+              --title "Release ${{ github.ref_name }}" \
+              --generate-notes
+          fi
