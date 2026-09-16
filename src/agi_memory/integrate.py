@@ -382,6 +382,15 @@ class JsonMcpToolIntegration(ToolIntegration):
 
         rules_path = self.get_rules_path(scope)
         if rules_path:
+            curr = rules_path.parent
+            while curr != curr.parent:
+                if curr.is_file():
+                    content = curr.read_text(encoding="utf-8")
+                    curr.unlink()
+                    curr.mkdir(parents=True, exist_ok=True)
+                    (curr / "rules.md").write_text(content, encoding="utf-8")
+                    break
+                curr = curr.parent
             rules_path.parent.mkdir(parents=True, exist_ok=True)
             if self.rules_template.startswith("---"):
                 rules_path.write_text(self.rules_template.strip() + "\n", encoding="utf-8")
@@ -1029,6 +1038,27 @@ def cmd_install(args: argparse.Namespace) -> None:
     except Exception as e:
         print(f"  [!] Hook setup skipped: {e}")
 
+    # Auto-configure slash commands & skills for installed tools
+    print(f"\nConfiguring slash commands & skills (scope: {scope})...")
+    try:
+        try:
+            from agi_memory import init_command as _init_cmd
+        except ImportError:
+            import init_command as _init_cmd
+        tool_names = [t.name for t in selected] if "all" not in targets else None
+        cmd_results = _init_cmd.install_init_command(
+            target_dir=Path.cwd() if scope != "user" else ".",
+            scope=scope,
+            force=getattr(args, "force", False),
+            tools=tool_names
+        )
+        for path_str, status in sorted(cmd_results.items()):
+            icon = "✓" if status.startswith("written") else ("-" if status.startswith("skipped") else "!")
+            lbl = status.split(" — ")[-1]
+            print(f"  [{icon}] {lbl:26}: {status.split(' — ')[0]}")
+    except Exception as e:
+        print(f"  [!] Slash command setup skipped: {e}")
+
     if not getattr(args, "skip_sync", False):
         setup_sync_interactive(
             non_interactive=getattr(args, "yes", False),
@@ -1400,6 +1430,15 @@ def cmd_init(args: argparse.Namespace) -> None:
         if p.exists() and not force:
             print(f"  [-] Skipped existing: {rel_path}")
             return
+        curr = p.parent
+        while curr != curr.parent:
+            if curr.is_file():
+                file_content = curr.read_text(encoding="utf-8")
+                curr.unlink()
+                curr.mkdir(parents=True, exist_ok=True)
+                (curr / "rules.md").write_text(file_content, encoding="utf-8")
+                break
+            curr = curr.parent
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content.strip() + "\n", encoding="utf-8")
         print(f"  [✓] Created: {rel_path}")

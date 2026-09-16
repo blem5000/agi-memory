@@ -8,14 +8,19 @@ actually IS beats file-extension counting.
 
 Formats verified against each tool's own docs (September 2026):
 
-  Claude Code   .claude/commands/<name>.md          MD + YAML frontmatter, $ARGUMENTS
+  Claude Code   .claude/skills/<name>/SKILL.md      SKILL.md + YAML frontmatter (modern)
+                .claude/commands/<name>.md          MD + YAML frontmatter, $ARGUMENTS (legacy)
   Cursor        .cursor/commands/<name>.md          MD
+                .cursor/skills/<name>/SKILL.md      SKILL.md + YAML frontmatter
   OpenCode      .opencode/commands/<name>.md        MD + YAML frontmatter, $ARGUMENTS
   Codex         .codex/prompts/<name>.md            MD + YAML frontmatter, $ARGUMENTS
-  Gemini/agy    .gemini/commands/<name>.toml        TOML: description + prompt, {{args}}
+                .codex/skills/<name>/SKILL.md       SKILL.md + YAML frontmatter
+  Gemini CLI    .gemini/commands/<name>.toml        TOML: description + prompt, {{args}}
+  Antigravity   .agents/skills/<name>/SKILL.md      SKILL.md + YAML frontmatter
   Windsurf      .windsurf/workflows/<name>.md       MD workflow, invoked /<name>
   Cline         .clinerules/workflows/<name>.md     MD workflow, invoked /<name>.md
   Roo Code      .roo/commands/<name>.md             MD
+                .roo/skills/<name>/SKILL.md         SKILL.md + YAML frontmatter
   Hermes        .hermes/skills/<name>/SKILL.md      SKILL.md + YAML frontmatter
 
 Zero external dependencies (stdlib only).
@@ -23,7 +28,7 @@ Zero external dependencies (stdlib only).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 COMMAND_NAME = "agi-init"
 DESCRIPTION = "Analyze this repository and write its agent-memory rules/ and context/ files."
@@ -121,13 +126,6 @@ def _md_frontmatter(body: str, args_token: str = "$ARGUMENTS") -> str:
     )
 
 
-def _md_plain(body: str, args_token: str = "$ARGUMENTS") -> str:
-    return (
-        f"# /{COMMAND_NAME}\n\n{DESCRIPTION}\n\n{body}\n{ARGUMENT_NOTE}\n"
-        f"Arguments: {args_token}\n"
-    )
-
-
 def _toml(body: str) -> str:
     """Gemini CLI / Antigravity. TOML with a multi-line basic string, so any
     embedded double quote or backslash must be escaped."""
@@ -147,33 +145,33 @@ def _workflow(body: str) -> str:
 
 
 def _skill(body: str) -> str:
-    """Hermes / Codex skill: SKILL.md with name + description frontmatter."""
+    """Claude / Cursor / Hermes / Codex / Antigravity skill: SKILL.md with name + description frontmatter."""
     return (
         "---\n"
         f"name: {COMMAND_NAME}\n"
         f"description: {DESCRIPTION} Use when setting up agent-memory in a repository, "
         "or when the project's rules/ and context/ files are missing or stale.\n"
         "---\n\n"
-        f"# {COMMAND_NAME}\n\n{body}\n"
+        f"# {COMMAND_NAME}\n\n{body}\n{ARGUMENT_NOTE}\nArguments: $ARGUMENTS\n"
     )
 
 
 # (tool label, relative path from project root, renderer)
 PROJECT_TARGETS: List[Tuple[str, str, str]] = [
-    ("Claude Code", f".claude/commands/{COMMAND_NAME}.md", "md_frontmatter"),
-    ("Cursor", f".cursor/commands/{COMMAND_NAME}.md", "md_plain"),
+    ("Claude Code", f".claude/skills/{COMMAND_NAME}/SKILL.md", "skill"),
+    ("Cursor", f".cursor/skills/{COMMAND_NAME}/SKILL.md", "skill"),
     ("OpenCode", f".opencode/commands/{COMMAND_NAME}.md", "md_frontmatter"),
-    ("OpenAI Codex", f".codex/prompts/{COMMAND_NAME}.md", "md_frontmatter"),
-    ("Antigravity / Gemini", f".gemini/commands/{COMMAND_NAME}.toml", "toml"),
+    ("OpenAI Codex", f".codex/skills/{COMMAND_NAME}/SKILL.md", "skill"),
+    ("Gemini CLI", f".gemini/commands/{COMMAND_NAME}.toml", "toml"),
+    ("Antigravity CLI", f".agents/skills/{COMMAND_NAME}/SKILL.md", "skill"),
     ("Windsurf", f".windsurf/workflows/{COMMAND_NAME}.md", "workflow"),
     ("Cline", f".clinerules/workflows/{COMMAND_NAME}.md", "workflow"),
-    ("Roo Code", f".roo/commands/{COMMAND_NAME}.md", "md_plain"),
+    ("Roo Code", f".roo/skills/{COMMAND_NAME}/SKILL.md", "skill"),
     ("Hermes Agent", f".hermes/skills/{COMMAND_NAME}/SKILL.md", "skill"),
 ]
 
 RENDERERS = {
     "md_frontmatter": _md_frontmatter,
-    "md_plain": _md_plain,
     "toml": _toml,
     "workflow": _workflow,
     "skill": _skill,
@@ -189,19 +187,22 @@ def user_scope_targets() -> List[Tuple[str, Path, str]]:
     """(tool label, absolute path, format) for user-scope command locations."""
     home = Path.home()
     return [
-        ("Claude Code", home / ".claude" / "commands" / f"{COMMAND_NAME}.md", "md_frontmatter"),
-        ("Cursor", home / ".cursor" / "commands" / f"{COMMAND_NAME}.md", "md_plain"),
+        ("Claude Code", home / ".claude" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
+        ("Cursor", home / ".cursor" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
         ("OpenCode", home / ".config" / "opencode" / "commands" / f"{COMMAND_NAME}.md", "md_frontmatter"),
-        ("OpenAI Codex", home / ".codex" / "prompts" / f"{COMMAND_NAME}.md", "md_frontmatter"),
-        ("Antigravity / Gemini", home / ".gemini" / "commands" / f"{COMMAND_NAME}.toml", "toml"),
+        ("OpenAI Codex", home / ".codex" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
+        ("Gemini CLI", home / ".gemini" / "commands" / f"{COMMAND_NAME}.toml", "toml"),
+        ("Antigravity CLI", home / ".gemini" / "config" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
         ("Windsurf", home / ".codeium" / "windsurf" / "global_workflows" / f"{COMMAND_NAME}.md", "workflow"),
         ("Cline", home / "Documents" / "Cline" / "Workflows" / f"{COMMAND_NAME}.md", "workflow"),
+        ("Roo Code", home / ".roo" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
         ("Hermes Agent", home / ".hermes" / "skills" / COMMAND_NAME / "SKILL.md", "skill"),
     ]
 
 
 def install_init_command(target_dir: Path | str = ".", project: str | None = None,
-                         scope: str = "project", force: bool = False) -> Dict[str, str]:
+                         scope: str = "project", force: bool = False,
+                         tools: Sequence[str] | None = None) -> Dict[str, str]:
     """Write /agi-init in every assistant's command format. Returns path -> status."""
     results: Dict[str, str] = {}
 
@@ -211,11 +212,32 @@ def install_init_command(target_dir: Path | str = ".", project: str | None = Non
         root = Path(target_dir).resolve()
         entries = [(label, root / rel, fmt) for label, rel, fmt in PROJECT_TARGETS]
 
+    if tools and "all" not in [t.lower() for t in tools]:
+        normalized_tools = [t.lower() for t in tools]
+        entries = [
+            (label, p, fmt) for label, p, fmt in entries
+            if any(t in label.lower() or (t in ("agy", "antigravity") and "antigravity" in label.lower())
+                   or (t in ("claude", "claude-code") and "claude" in label.lower())
+                   or (t in ("codex", "openai-codex") and "codex" in label.lower())
+                   for t in normalized_tools)
+        ]
+
     for label, path, fmt in entries:
         try:
             if path.exists() and not force:
                 results[str(path)] = f"skipped (exists) — {label}"
                 continue
+            # If an ancestor path is an existing regular file (e.g. legacy .clinerules file),
+            # convert it to directory form so subdirectories can be created.
+            curr = path.parent
+            while curr != curr.parent:
+                if curr.is_file():
+                    content = curr.read_text(encoding="utf-8")
+                    curr.unlink()
+                    curr.mkdir(parents=True, exist_ok=True)
+                    (curr / "rules.md").write_text(content, encoding="utf-8")
+                    break
+                curr = curr.parent
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(render(fmt, project), encoding="utf-8")
             results[str(path)] = f"written — {label}"

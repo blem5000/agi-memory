@@ -111,30 +111,32 @@ Every integrated tool gains access to 16 native tools across the four cognitive 
 
 ---
 
-## The `/agi-init` Slash Command
+## The `/agi-init` Slash Command & Skills
 
-`agi-integrate init <path>` wires a project and writes an `/agi-init` command in
-every assistant's own format, so the same playbook is available whichever tool is
-open:
+`agi-integrate init <path>` (project scope) and `agi-integrate install all` (user/project scope) wire assistant-native slash commands and skills so the same playbook is available whichever tool is open:
 
-| Assistant | Path written | Format |
-|---|---|---|
-| Claude Code | `.claude/commands/agi-init.md` | Markdown + YAML frontmatter |
-| Cursor | `.cursor/commands/agi-init.md` | Markdown |
-| OpenCode | `.opencode/commands/agi-init.md` | Markdown + YAML frontmatter |
-| OpenAI Codex | `.codex/prompts/agi-init.md` | Markdown + YAML frontmatter |
-| Antigravity / Gemini | `.gemini/commands/agi-init.toml` | TOML (`description` + `prompt`) |
-| Windsurf | `.windsurf/workflows/agi-init.md` | Workflow |
-| Cline | `.clinerules/workflows/agi-init.md` | Workflow |
-| Roo Code | `.roo/commands/agi-init.md` | Markdown |
-| Hermes Agent | `.hermes/skills/agi-init/SKILL.md` | SKILL.md |
+| Assistant | Native Path Written | Format | How to Invoke |
+|---|---|---|---|
+| **Claude Code** | `.claude/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` (or autonomous skill trigger) |
+| **Cursor** | `.cursor/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` in Chat / Composer |
+| **OpenCode** | `.opencode/commands/agi-init.md` | Markdown + YAML frontmatter, `$ARGUMENTS` | `/agi-init` in TUI |
+| **OpenAI Codex** | `.codex/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` in Codex terminal |
+| **Antigravity CLI** | `.agents/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` in agy CLI |
+| **Gemini CLI** | `.gemini/commands/agi-init.toml` | TOML (`description` + `prompt`, `{{args}}`) | `/agi-init` in Gemini CLI |
+| **Windsurf** | `.windsurf/workflows/agi-init.md` | Workflow Markdown | `/agi-init` in Windsurf |
+| **Cline** | `.clinerules/workflows/agi-init.md` | Workflow Markdown | `/agi-init.md` in Cline |
+| **Roo Code** | `.roo/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` in Roo Code |
+| **Hermes Agent** | `.hermes/skills/agi-init/SKILL.md` | Skill (`SKILL.md` + YAML frontmatter) | `/agi-init` in Hermes Agent |
+| **Aider** | `.aider.conventions.md` | Conventions Markdown | Automatically loaded (no custom slash command engine) |
+| **Goose** | `~/.config/goose/config.yaml` | Recipe mapping | Built-ins (`/help`, `/compact`) or custom recipes |
+| **Crush & Pi** | Built-in CLI commands | Terminal native | Built-ins (`/new`, `/model`, `/compact`) |
 
 Running `/agi-init` has the assistant read the codebase and write the project's
 `rules/` and `context/` files from what it actually finds, rather than filling a
 template. `agi-memory analyze --json` gives it the deterministic facts (stack,
 package manager, build/test commands, CI) as a starting point.
 
-Use `--scope user` to install the command globally instead of per-project.
+Use `--scope user` to install slash commands and skills globally (`~/.claude/skills/`, `~/.cursor/skills/`, `~/.gemini/config/skills/`, etc.) instead of per-project.
 
 ---
 
