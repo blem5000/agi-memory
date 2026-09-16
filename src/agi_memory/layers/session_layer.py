@@ -323,20 +323,23 @@ class SessionLayer(MemoryLayer):
                 con.execute("INSERT INTO observations_fts(observations_fts) VALUES('rebuild')")
             except sqlite3.Error:
                 pass
+        con.execute("DROP TRIGGER IF EXISTS observations_ai")
+        con.execute("DROP TRIGGER IF EXISTS observations_ad")
+        con.execute("DROP TRIGGER IF EXISTS observations_au")
         con.execute("""
-            CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations BEGIN
+            CREATE TRIGGER observations_ai AFTER INSERT ON observations BEGIN
                 INSERT INTO observations_fts(rowid, title, subtitle, facts, narrative, concepts)
                 VALUES (new.id, new.title, new.subtitle, new.facts, new.narrative, new.concepts);
             END
         """)
         con.execute("""
-            CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations BEGIN
+            CREATE TRIGGER observations_ad AFTER DELETE ON observations BEGIN
                 INSERT INTO observations_fts(observations_fts, rowid, title, subtitle, facts, narrative, concepts)
                 VALUES ('delete', old.id, old.title, old.subtitle, old.facts, old.narrative, old.concepts);
             END
         """)
         con.execute("""
-            CREATE TRIGGER IF NOT EXISTS observations_au AFTER UPDATE ON observations BEGIN
+            CREATE TRIGGER observations_au AFTER UPDATE ON observations BEGIN
                 INSERT INTO observations_fts(observations_fts, rowid, title, subtitle, facts, narrative, concepts)
                 VALUES ('delete', old.id, old.title, old.subtitle, old.facts, old.narrative, old.concepts);
                 INSERT INTO observations_fts(rowid, title, subtitle, facts, narrative, concepts)

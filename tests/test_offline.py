@@ -361,13 +361,14 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 import subprocess as _sp
 from agi_memory.sync import ensure_merge_attributes as _ensure_attrs
 def _git(*a, cwd):
-    return _sp.run(["git", *a], cwd=cwd, capture_output=True, text=True)
+    _env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return _sp.run(["git", *a], cwd=cwd, capture_output=True, text=True, env=_env)
 with tempfile.TemporaryDirectory() as tmp_dir:
     _base = Path(tmp_dir)
     _remote = _base / "remote.git"
     _git("init", "-q", "--bare", str(_remote), cwd=_base)
     for _m in ("m1", "m2"):
-        _sp.run(["git", "clone", "-q", str(_remote), str(_base / _m)], capture_output=True)
+        _git("clone", "-q", str(_remote), str(_base / _m), cwd=_base)
         _git("config", "user.email", "t@t", cwd=_base / _m)
         _git("config", "user.name", "t", cwd=_base / _m)
     _d1 = _base / "m1"
