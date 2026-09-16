@@ -1,0 +1,73 @@
+name: Notify Telegram
+
+# Failure notifier for our own workflows. Fires only on failure and sends
+# a Telegram message with the run link, failed job names and a trimmed
+# log tail, so the next step (agent triage) can start from the phone.
+#
+# Needs repo secrets: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. The job skips
+# gracefully when they are absent. This workflow intentionally does NOT
+# listen to itself, so a notifier failure cannot loop.
+
+on:
+  workflow_run:
+    workflows: ["CI", "Release", "Fork Sync (rebase onto upstream)"]
+    types: [completed]
+
+permissions:
+  actions: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != ''
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Collect failure context
+        id: ctx
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          {
+            echo "run_url=${{ github.event.workflow_run.html_url }}"
+            echo "wf_name=${{ github.event.workflow_run.name }}"
+            echo "branch=${{ github.event.workflow_run.head_branch }}"
+          } >> "$GITHUB_OUTPUT"
+          gh run view "$RUN_ID" --json jobs \
+            --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")' \
+            > failed_jobs.txt
+          echo "failed<<EOF" >> "$GITHUB_OUTPUT"
+          cat failed_jobs.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          # Trimmed tail of the failed steps' logs (Telegram caps at 4096 chars).
+          gh run view "$RUN_ID" --log-failed 2>/dev/null | tail -c 2000 > log_tail.txt \
+            || echo "(no failed-step logs available)" > log_tail.txt
+          echo "log<<EOF" >> "$GITHUB_OUTPUT"
+          cat log_tail.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Send Telegram message
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RUN_URL: ${{ steps.ctx.outputs.run_url }}
+          WF_NAME: ${{ steps.ctx.outputs.wf_name }}
+          BRANCH: ${{ steps.ctx.outputs.branch }}
+          FAILED: ${{ steps.ctx.outputs.failed }}
+          LOGTAIL: ${{ steps.ctx.outputs.log }}
+        run: |
+          set -euo pipefail
+          TEXT="❌ $WF_NAME failed
+          Repo: ${{ github.repository }} @ $BRANCH
+          Run: $RUN_URL
+          Failed jobs: $FAILED
+
+          Log tail:
+          $LOGTAIL"
+          jq -n --arg chat_id "$CHAT_ID" --arg text "$TEXT" \
+            '{chat_id: $chat_id, text: $text, disable_web_page_preview: true}' \
+            | curl -sf -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
+                -H "Content-Type: application/json" -d @- -o /dev/null
+          echo "Telegram notification sent."
