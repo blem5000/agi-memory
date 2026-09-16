@@ -1,0 +1,83 @@
+name: Fork Sync (rebase onto upstream)
+
+# Keeps this fork's main replayed on top of upstream main:
+# our commits are rebased (not merged), so the fork always looks like
+# "upstream + our patches". Runs nightly and on demand.
+#
+# Fork-only: the `if:` guard below means this never runs on upstream,
+# so a PR carrying this file upstream is harmless.
+#
+# Conventions that keep this green:
+# - Fork feature commits must NOT touch `version` in pyproject.toml.
+#   Only bump it in a fork release commit, to a number ABOVE upstream's.
+#   (A same-line version bump upstream trips the rebase into a conflict
+#   on purpose: version ordering is a human decision, so it opens an issue.)
+# - Never fetch upstream tags here: fork tags (v0.8.0, ...) intentionally
+#   differ from upstream's same-named tags and would clobber each other.
+# - Pushes made with GITHUB_TOKEN do not retrigger workflows, so CI will
+#   not run on the auto-pushed main -- that is why this job runs the
+#   offline test suite itself BEFORE pushing.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: github.repository == 'blem5000/agi-memory'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Rebase fork commits onto upstream main
+        id: rebase
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/kdbhalala/agi-memory.git
+          git fetch upstream main
+          BEHIND="$(git rev-list --count HEAD..upstream/main)"
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          if [ "$BEHIND" = "0" ]; then
+            echo "Already up to date; nothing to do."
+            exit 0
+          fi
+          echo "Upstream is $BEHIND commits ahead; rebasing."
+          git rebase upstream/main
+          echo "After rebase: $(git log --oneline upstream/main..HEAD | wc -l) fork commits on top."
+
+      - name: Verify rebased tree
+        if: steps.rebase.outputs.behind != '0'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          python tests/test_offline.py
+
+      - name: Push rebased main
+        if: steps.rebase.outputs.behind != '0'
+        run: git push --force-with-lease origin HEAD:main
+
+      - name: Open issue on conflict
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git rebase --abort || true
+          gh issue create \
+            --title "fork-sync: rebase onto upstream/main needs manual resolution ($(date -u +%F))" \
+            --body "Nightly rebase failed (conflict or red tests). Fetch upstream, rebase locally, resolve, push. Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
