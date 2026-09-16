@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .bootstrap import detect_project_name, extract_readme_context
+from .config import hidden_subprocess_kwargs
 
 # Directories never worth walking; also keeps vendored code out of the census.
 IGNORE_DIRS = {
@@ -90,7 +91,8 @@ def _read(path: Path, limit: int = 200_000) -> str:
 
 def _git(repo: Path, *args: str, timeout: int = 5) -> str:
     try:
-        res = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, timeout=timeout,
+                             **hidden_subprocess_kwargs())
         return res.stdout.strip() if res.returncode == 0 else ""
     except Exception:
         return ""

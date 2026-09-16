@@ -6,6 +6,7 @@ Zero external dependencies (stdlib only).
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 def _resolve_base_dir() -> Path:
@@ -83,3 +84,32 @@ def get_state_path() -> Path:
     if vault_state.parent.exists():
         return vault_state
     return get_data_dir() / "promoted.json"
+
+
+def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:
+    """Kwargs hiding console windows for child processes on Windows.
+
+    On Windows every ``git``/``gh``/``python`` spawned via ``subprocess``
+    otherwise flashes a ``conhost``/``cmd`` window (title e.g. ``git fetch``)
+    when the parent (MCP server, OpenCode plugin, hook) has no visible
+    console. ``CREATE_NO_WINDOW`` + ``STARTF_USESHOWWINDOW``/``SW_HIDE``
+    keeps the child fully in background. No-op dict on POSIX.
+    Stdlib only, safe to spread into run/call/check_output/Popen.
+    """
+    if os.name != "nt":
+        return {}
+    kwargs: dict = {}
+    try:
+        creationflags = int(extra_creationflags or 0)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        kwargs["creationflags"] = creationflags
+    except Exception:
+        pass
+    try:
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0x00000001)
+        startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+        kwargs["startupinfo"] = startupinfo
+    except Exception:
+        pass
+    return kwargs

@@ -25,7 +25,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 try:
-    from agi_memory.config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir
+    from agi_memory.config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir, hidden_subprocess_kwargs
     from agi_memory.layers.session_layer import add_record_listener, remove_record_listener
     from agi_memory.layers.graph_layer import add_edge_listener, remove_edge_listener
     from agi_memory.vault import (
@@ -36,7 +36,7 @@ try:
         init_vault,
     )
 except ImportError:
-    from config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir
+    from config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir, hidden_subprocess_kwargs
     from layers.session_layer import add_record_listener, remove_record_listener
     from layers.graph_layer import add_edge_listener, remove_edge_listener
     from vault import (
@@ -100,7 +100,8 @@ def check_gh() -> dict[str, Any]:
             [gh_bin, "auth", "status"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            **hidden_subprocess_kwargs()
         )
         # gh auth status exits 0 when authenticated
         auth_ok = (proc.returncode == 0) or ("Logged in to" in proc.stdout or "Logged in to" in proc.stderr)
@@ -123,7 +124,8 @@ def check_gh() -> dict[str, Any]:
                     [gh_bin, "api", "user", "-q", ".login"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    **hidden_subprocess_kwargs()
                 )
                 if u_proc.returncode == 0 and u_proc.stdout.strip():
                     username = u_proc.stdout.strip()
@@ -136,14 +138,15 @@ def check_gh() -> dict[str, Any]:
 
 
 def _run_git(cmd: list[str], cwd: Path, timeout: int = 15) -> tuple[int, str, str]:
-    """Helper to run git commands safely."""
+    """Helper to run git commands safely (no console window on Windows)."""
     try:
         proc = subprocess.run(
             ["git"] + cmd,
             cwd=str(cwd),
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            **hidden_subprocess_kwargs()
         )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except subprocess.TimeoutExpired:
@@ -225,7 +228,8 @@ def setup_gh_repo(
     full_repo = f"{username}/{repo_name}" if username else repo_name
 
     # Check if repo already exists on GitHub
-    check_rc = subprocess.run(["gh", "repo", "view", full_repo], capture_output=True, text=True)
+    check_rc = subprocess.run(["gh", "repo", "view", full_repo], capture_output=True, text=True,
+                              **hidden_subprocess_kwargs())
     if check_rc.returncode == 0:
         # Repo already exists
         clone_url = f"https://github.com/{full_repo}.git"
@@ -237,7 +241,8 @@ def setup_gh_repo(
         else:
             cmd.append("--public")
 
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             **hidden_subprocess_kwargs())
         if res.returncode != 0:
             return False, f"Failed to create GitHub repo: {res.stderr.strip()}"
         clone_url = f"https://github.com/{full_repo}.git"
@@ -667,15 +672,17 @@ def _spawn_detached_check(vault_dir: Path | str | None = None) -> bool:
         except Exception:
             _cwd = None
         kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL,
-                                  "stdout": subprocess.DEVNULL,
-                                  "stderr": subprocess.DEVNULL,
-                                  "env": env, "close_fds": True}
+                                   "stdout": subprocess.DEVNULL,
+                                   "stderr": subprocess.DEVNULL,
+                                   "env": env, "close_fds": True}
         if _cwd:
             kwargs["cwd"] = _cwd
         if os.name == "nt":
             creationflags = getattr(subprocess, "DETACHED_PROCESS", 0)
             creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            kwargs["creationflags"] = creationflags
+            # CREATE_NO_WINDOW is what actually suppresses the conhost/cmd
+            # popup; DETACHED_PROCESS alone still flashes one on Win10/11.
+            kwargs.update(hidden_subprocess_kwargs(creationflags))
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen(args, **kwargs)  # noqa: S603 — fixed argv, ours

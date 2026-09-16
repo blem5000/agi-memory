@@ -17,14 +17,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from agi_memory.config import DEFAULT_DB, get_default_db
+    from agi_memory.config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
     from agi_memory.layers.base import Hit, MemoryLayer, open_db, stem_terms
 except ImportError:
     try:
-        from ..config import DEFAULT_DB, get_default_db
+        from ..config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
         from .base import Hit, MemoryLayer, open_db, stem_terms
     except (ImportError, ValueError):
-        from config import DEFAULT_DB, get_default_db
+        from config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         # Script mode is how every lifecycle hook runs. Omitting open_db here
         # made EpisodicLayer() raise NameError inside the hooks' bare except,
         # so no real session was ever recorded.
@@ -61,7 +61,8 @@ def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Opti
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
     except Exception:
         pass
@@ -72,7 +73,8 @@ def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Opti
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
     except Exception:
         pass
@@ -90,7 +92,8 @@ def _detect_git_touched_files(cwd: Path | str | None = None) -> List[str]:
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
         for line in out.splitlines():
             line = line.strip()
