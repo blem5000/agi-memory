@@ -15,14 +15,14 @@ import sys
 from typing import Any, Dict, List, Optional
 
 try:
-    from agi_memory.config import get_default_db
+    from agi_memory.config import get_default_db, hidden_subprocess_kwargs
     from agi_memory.layers.session_layer import SessionLayer
 except ImportError:
     try:
-        from config import get_default_db
+        from config import get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         from layers.session_layer import SessionLayer
     except ImportError:
-        from .config import get_default_db
+        from .config import get_default_db, hidden_subprocess_kwargs  # type: ignore[no-redef]
         from .layers.session_layer import SessionLayer
 
 
@@ -74,7 +74,8 @@ def detect_project_name(repo_path: Path) -> str:
     # 5. Git remote origin
     try:
         res = subprocess.run(["git", "remote", "get-url", "origin"],
-                             cwd=repo_path, capture_output=True, text=True, timeout=3)
+                             cwd=repo_path, capture_output=True, text=True, timeout=3,
+                             **hidden_subprocess_kwargs())
         if res.returncode == 0 and res.stdout.strip():
             raw = res.stdout.strip().rstrip("/")
             if raw.endswith(".git"):
@@ -127,7 +128,8 @@ def extract_git_commits(repo_path: Path, max_commits: int = 25) -> list[dict]:
             "--pretty=format:%H%x1f%an%x1f%ad%x1f%s%x1f%b%x1e",
             "--date=short"
         ]
-        res = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=5)
+        res = subprocess.run(cmd, cwd=repo_path, capture_output=True, text=True, timeout=5,
+                             **hidden_subprocess_kwargs())
         if res.returncode != 0 or not res.stdout:
             return []
     except Exception:

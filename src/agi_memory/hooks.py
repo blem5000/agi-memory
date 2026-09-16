@@ -36,9 +36,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from agi_memory.config import DATA_DIR, resolve_agent_id
+    from agi_memory.config import DATA_DIR, hidden_subprocess_kwargs, resolve_agent_id
 except ImportError:
-    from config import DATA_DIR, resolve_agent_id
+    from config import DATA_DIR, hidden_subprocess_kwargs, resolve_agent_id  # type: ignore[no-redef]
 
 REPO_DIR = Path(__file__).resolve().parent
 DEFAULT_HOOKS_DIR = DATA_DIR / "hooks"
@@ -71,7 +71,8 @@ def detect_project(cwd: Path | None = None) -> str:
             ["git", "rev-parse", "--show-toplevel"],
             cwd=str(root),
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
+            **hidden_subprocess_kwargs()
         ).strip()
         if git_root:
             return Path(git_root).name
@@ -651,7 +652,7 @@ def hook_pre_commit() -> None:
         val_script = REPO_DIR.parent.parent / "hooks" / "validate-offline.sh"
     if val_script.exists() and os.access(val_script, os.X_OK):
         env = {**os.environ, "AGI_MEMORY_HOOK": "1"}
-        ret = subprocess.call([str(val_script)], env=env)
+        ret = subprocess.call([str(val_script)], env=env, **hidden_subprocess_kwargs())
         if ret != 0:
             sys.exit(ret)
         return
@@ -662,7 +663,7 @@ def hook_pre_commit() -> None:
         test_script = REPO_DIR.parent.parent / "tests" / "test_offline.py"
     if test_script.exists():
         py = detect_python()
-        ret = subprocess.call([py, str(test_script)])
+        ret = subprocess.call([py, str(test_script)], **hidden_subprocess_kwargs())
         if ret != 0:
             sys.exit(ret)
 
@@ -676,7 +677,8 @@ def hook_post_commit(project: Optional[str] = None) -> None:
         log_out = subprocess.check_output(
             ["git", "log", "-1", "--pretty=format:%h%x1f%s%x1f%b"],
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
+            **hidden_subprocess_kwargs()
         ).strip()
         if not log_out:
             return
@@ -735,7 +737,8 @@ def hook_post_commit(project: Optional[str] = None) -> None:
             diff_files = subprocess.check_output(
                 ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", cid],
                 stderr=subprocess.DEVNULL,
-                text=True
+                text=True,
+                **hidden_subprocess_kwargs()
             ).splitlines()
             if diff_files:
                 cl = CodeLayer(project=proj)
