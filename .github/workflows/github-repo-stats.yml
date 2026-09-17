@@ -16,6 +16,10 @@ permissions:
 jobs:
   collect-stats:
     name: Collect & Archive Repository Stats
+    # Upstream only: traffic stats of a fork are noise, and without a
+    # GHRS_GITHUB_API_TOKEN PAT the traffic API 403s on GITHUB_TOKEN
+    # ("Resource not accessible by integration"). Same pattern as release.yml.
+    if: github.repository == 'kdbhalala/agi-memory'
     runs-on: ubuntu-latest
     steps:
       - name: Run GitHub Repo Stats
