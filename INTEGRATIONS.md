@@ -303,11 +303,12 @@ Append the standard Memory Discipline section from above.
 agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agent-memory.js
 agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agent-memory.js
 ```
-The generated zero-dependency plugin shells out to the hooks CLI: session-start
-via `experimental.chat.system.transform`, user-prompt-submit by reading the
-typed text in `chat.message` and adding the matches through the same system
-transform, pre-compact via `experimental.session.compacting`, session-end on
-`session.idle`.
+The generated zero-dependency plugin (`export default { id: "agent-memory", async setup(ctx) {} }`)
+shells out via `execFileSync(PY, [HOOKS_PY, verb], { input })`: session-start and
+user-prompt-submit via `ctx.session.hook("prompt", ...)`, injection via
+`ctx.session.hook("context", (e) => e.system.push({ type: "text", text }))`,
+pre-compact via `ctx.session.hook("compaction", ...)`, session-end via
+`ctx.event.subscribe()` on `session.idle`.
 
 ---
 
