@@ -1119,6 +1119,20 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "stats":
             cmd_stats(argv[1:])
             return
+        elif cmd == "snapshot":
+            try:
+                from agi_memory import hooks as _hooks
+            except ImportError:
+                import hooks as _hooks
+            import argparse as _ap
+            _p = _ap.ArgumentParser(prog="agi-memory snapshot")
+            _p.add_argument("--path", default=".")
+            _p.add_argument("--project", "-p", default=None)
+            _p.add_argument("--limit", "-n", type=int, default=3)
+            _a = _p.parse_args(argv[1:])
+            print(_hooks.export_snapshot(_a.path, _a.project, _a.limit)
+                  or "(nothing to snapshot: empty store)")
+            return
         elif cmd in ("-v", "--version", "version"):
             print(f"agi-memory {__version__}")
             return
@@ -1150,6 +1164,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory analyze [PATH] [--json]   Report detected stack, commands, layout")
             print("  agi-memory integrate [COMMAND ...]   Assistant integration & project wiring")
             print("  agi-memory hooks [TOOLS ...]         Manage automated lifecycle hooks")
+            print("  agi-memory snapshot [--path .]       Write .agent/MEMORY.md fallback for hook-less tools")
             print("  agi-memory status                    Show MCP integration status")
             print("  agi-memory sync [now|dedupe|init]    Manage multi-device vault synchronization")
             print("  agi-memory test                      Verify MCP handshake and registered tools\n")

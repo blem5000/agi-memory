@@ -1468,6 +1468,8 @@ When working in this project:
 2. **Deep Architecture Search**: Call `memory_recall_deep(query, project="{proj_name}")` when foundational or cross-domain context is needed.
 3. **Record Verified Decisions**: Call `memory_record(text, title, project="{proj_name}")` whenever establishing patterns or resolving non-trivial issues.
 
+Without MCP access (plain terminal, SSH, CI), read [`.agent/MEMORY.md`](.agent/MEMORY.md) instead: the same pinned invariants and top precedents as a file. Refresh it with `agi-hooks snapshot`.
+
 ## First-Run Setup
 
 The project's `rules/` and `context/` files are written by the assistant, not by
@@ -1593,6 +1595,17 @@ alwaysApply: true
         rel = Path(path).relative_to(target) if str(path).startswith(str(target)) else Path(path)
         mark = "✓" if status.startswith("written") else ("!" if status.startswith("failed") else "-")
         print(f"  [{mark}] /{_init_cmd.COMMAND_NAME}: {rel} ({status.split(' — ')[-1]})")
+
+    # 9. File fallback for hook-less tools: .agent/MEMORY.md
+    try:
+        try:
+            from agi_memory import hooks as _hooks
+        except ImportError:
+            import hooks as _hooks
+        snap = _hooks.export_snapshot(target, proj_name)
+        print(f"  [{'✓' if snap else '-'}] File fallback: {snap or 'empty store, skipped'}")
+    except Exception as e:
+        print(f"  [-] File fallback skipped: {e}")
 
     print(f"\n[✓] {target} is wired for agent-memory ({len(written)} assistant command formats).")
     print(f"\nNext: open this repo in your assistant and run  /{_init_cmd.COMMAND_NAME}")
