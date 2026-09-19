@@ -176,6 +176,10 @@ def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> No
             from layers.episodic_layer import _detect_git_touched_files, started_within
 
         ep = EpisodicLayer(project=proj)
+        try:
+            ep.close_stale_sessions(project=proj)
+        except Exception:
+            pass
         if reuse and not sid:
             last = ep.get_last_session(project=proj)
             if last and last["status"] == "active" and started_within(last["started_at"], 12):

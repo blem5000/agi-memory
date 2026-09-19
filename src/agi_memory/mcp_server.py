@@ -319,6 +319,10 @@ def _ensure_session(project):
         if proj in _SESSION_REGISTERED:
             return proj
         ep = EpisodicLayer(project=proj)
+        try:
+            ep.close_stale_sessions(project=proj)
+        except Exception:
+            pass
         last = ep.get_last_session(project=proj)
         if not (last and last.get("status") == "active" and _started_recently(last.get("started_at"))):
             ep.start_session(project=proj)

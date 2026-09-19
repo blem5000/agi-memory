@@ -452,6 +452,42 @@ class EpisodicLayer(MemoryLayer):
             "outcome": final_row[14] or "unknown",
         }
 
+    def close_stale_sessions(self, max_age_hours: float = 12,
+                             project: Optional[str] = None) -> int:
+        """Complete active sessions older than max_age_hours.
+
+        Hook-less tools never send session-end, so their rows stay active
+        forever and later pile prompts onto dead sessions. The outcome is
+        left untouched: timing out is not evidence of success, and an
+        unmarked session must stay 'unknown'.
+        """
+        proj = project or self.project
+        try:
+            con = self._get_con()
+            cur = con.cursor()
+            if proj:
+                cur.execute("SELECT session_id, started_at FROM episodic_sessions "
+                            "WHERE project = ? AND status = 'active'", (proj,))
+            else:
+                cur.execute("SELECT session_id, started_at FROM episodic_sessions "
+                            "WHERE status = 'active'")
+            stale = [r[0] for r in cur.fetchall()
+                     if not started_within(r[1], max_age_hours)]
+            for sid in stale:
+                cur.execute("""
+                    UPDATE episodic_sessions
+                    SET ended_at = CURRENT_TIMESTAMP,
+                        duration_seconds = max(1.0, ROUND((julianday(CURRENT_TIMESTAMP)
+                            - julianday(started_at)) * 86400.0, 1)),
+                        status = 'completed'
+                    WHERE session_id = ? AND status = 'active'
+                """, (sid,))
+            con.commit()
+            con.close()
+            return len(stale)
+        except sqlite3.Error:
+            return 0
+
     def record_event(
         self,
         session_id: str,
