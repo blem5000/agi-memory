@@ -12,6 +12,7 @@ benchmarks/results/
 .codegraph/
 *.local.md
 *.local.json
+.agent/
 CLAUDE.local.md
 settings.local.json
 dist/
