@@ -245,6 +245,14 @@ def _miss_text(query: str, project, layer) -> str:
     except Exception:
         total = None
 
+    # A miss is a vocabulary-gap signal. Log it so `alias suggest` can turn
+    # repeated misses into alias entries; never let logging break the reply.
+    try:
+        if total and hasattr(layer, "log_miss"):
+            layer.log_miss(query, project)
+    except Exception:
+        pass
+
     proj = project or "(all projects)"
     if total == 0:
         return (f"(no memories stored yet for {proj})\n"
@@ -786,13 +794,43 @@ def cmd_alias(argv: list[str]) -> None:
     usage = ("Usage:\n"
              "  agi-memory alias list\n"
              "  agi-memory alias add <term> <canonical> [--category C]\n"
-             "  agi-memory alias rm <term>\n\n"
+             "  agi-memory alias rm <term>\n"
+             "  agi-memory alias misses [--limit N]      Show frequent retrieval misses\n"
+             "  agi-memory alias suggest [--limit N]     Misses not covered by any alias\n\n"
              "A term is matched lowercased; the canonical form is stored as written.")
     if not argv or argv[0] in ("-h", "--help"):
         print(usage)
         return
     sub, rest = argv[0], argv[1:]
     l2 = GraphLayer()
+    if sub in ("misses", "suggest"):
+        import argparse
+        parser = argparse.ArgumentParser(prog=f"agi-memory alias {sub}")
+        parser.add_argument("--limit", "-n", type=int, default=20)
+        parser.add_argument("--project", "-p", default=None)
+        args = parser.parse_args(rest)
+        l1 = SessionLayer()
+        stats = l1.miss_stats(limit=args.limit, project=args.project)
+        if not stats:
+            print("(no retrieval misses logged yet)")
+            return
+        if sub == "misses":
+            for s in stats:
+                print(f"  {s['count']:>4}x  [{s['project']}] {s['query']}")
+            return
+        known = {a.lower() for a in l2.list_aliases()} | \
+                {c.lower() for c in l2.list_aliases().values()}
+        shown = 0
+        for s in stats:
+            terms = {t.lower() for t in __import__("re").findall(r"[a-z0-9]+", s["query"].lower())
+                     if len(t) > 2}
+            if terms and not (terms & known):
+                print(f"  {s['count']:>4}x  [{s['project']}] {s['query']}")
+                print(f"         fix with: agi-memory alias add <term> <canonical>")
+                shown += 1
+        if not shown:
+            print("(all frequent misses are already covered by aliases)")
+        return
     if sub == "list":
         aliases = l2.list_aliases()
         if not aliases:
@@ -1157,7 +1195,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory pin <key> <content>       Pin critical invariant to core memory")
             print("  agi-memory unpin <key>               Unpin block from core memory")
             print("  agi-memory blocks                    List pinned core memory blocks")
-            print("  agi-memory alias list|add|rm         Curate the synonym/acronym table")
+            print("  agi-memory alias list|add|rm|misses|suggest  Curate the synonym/acronym table")
             print("  agi-memory promote [--dry-run]       Promote durable learnings into the knowledge graph")
             print("  agi-memory redact [--values FILE]    Strip credentials from stored memories")
             print("  agi-memory init [PATH]               Wire a project & install the /agi-init slash command")

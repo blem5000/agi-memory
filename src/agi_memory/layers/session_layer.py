@@ -361,8 +361,68 @@ class SessionLayer(MemoryLayer):
         con.execute("""
             CREATE INDEX IF NOT EXISTS idx_core_blocks_pinned ON core_memory_blocks(pinned, project)
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS recall_misses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query TEXT NOT NULL,
+                project TEXT DEFAULT 'global',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_recall_misses_query ON recall_misses(query, project)
+        """)
         con.commit()
         con.close()
+
+    def log_miss(self, query: str, project: str | None = None) -> None:
+        """Record a retrieval miss so vocabulary gaps become visible.
+
+        Never raises: a read path must not break because the miss log cannot
+        be written. The table is created on demand so existing databases gain
+        it without a migration.
+        """
+        q = (query or "").strip()[:200]
+        if not q:
+            return
+        try:
+            con = open_db(self.db_path)
+            try:
+                con.execute("""
+                    CREATE TABLE IF NOT EXISTS recall_misses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        query TEXT NOT NULL,
+                        project TEXT DEFAULT 'global',
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                con.execute("INSERT INTO recall_misses (query, project) VALUES (?, ?)",
+                            (q, project or self.project or "global"))
+                con.commit()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass
+
+    def miss_stats(self, limit: int = 20, project: str | None = None) -> list[dict]:
+        """Most frequent miss queries, newest first on ties."""
+        try:
+            con = open_db(self.db_path, readonly=True)
+            try:
+                sql = ("SELECT query, project, COUNT(*) AS n, MAX(created_at) AS last_seen "
+                       "FROM recall_misses")
+                args: list = []
+                if project:
+                    sql += " WHERE project = ?"
+                    args.append(project)
+                sql += " GROUP BY query, project ORDER BY n DESC, last_seen DESC LIMIT ?"
+                args.append(limit)
+                return [{"query": r[0], "project": r[1], "count": r[2], "last_seen": r[3]}
+                        for r in con.execute(sql, args).fetchall()]
+            finally:
+                con.close()
+        except sqlite3.Error:
+            return []
 
     def search(self, query: str, limit: int = 5) -> list[Hit]:
         """Search working memory using SQLite FTS5 with prefix wildcard fallback."""
