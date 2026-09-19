@@ -1020,7 +1020,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.argv = [sys.argv[0]] + argv[1:]
             integrate.main()
             return
-        elif cmd in ("hooks", "status", "install", "init", "uninstall", "test", "generate"):
+        elif cmd in ("hooks", "status", "doctor", "install", "init", "uninstall", "test", "generate"):
             try:
                 from agi_memory import integrate
             except ImportError:

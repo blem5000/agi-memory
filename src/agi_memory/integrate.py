@@ -1287,6 +1287,93 @@ def cmd_sync(args: argparse.Namespace) -> None:
             setup_sync_interactive()
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Parity check: one view proving every tool sees the same memory."""
+    scope = getattr(args, "scope", "user")
+    as_json = getattr(args, "json", False)
+    py_path = detect_python()
+    srv_path = detect_server()
+    report: Dict[str, Any] = {
+        "python": py_path,
+        "server": srv_path,
+        "server_exists": Path(srv_path).exists(),
+        "scope": scope,
+    }
+    try:
+        try:
+            from agi_memory.config import get_default_db, get_vault_dir
+        except ImportError:
+            from config import get_default_db, get_vault_dir  # type: ignore
+        db = Path(get_default_db())
+        report["db_path"] = str(db)
+        report["db_exists"] = db.exists()
+        report["db_bytes"] = db.stat().st_size if db.exists() else 0
+        try:
+            vault_dir = Path(get_vault_dir())
+            report["vault_dir"] = str(vault_dir)
+        except Exception:
+            report["vault_dir"] = ""
+    except Exception:
+        report["db_path"] = ""
+        report["db_exists"] = False
+    try:
+        try:
+            from agi_memory.layers.session_layer import SessionLayer
+        except ImportError:
+            from layers.session_layer import SessionLayer  # type: ignore
+        report["observations"] = SessionLayer().count_observations()
+    except Exception:
+        report["observations"] = -1
+    for key, sql in (("sessions", "SELECT COUNT(*) FROM episodic_sessions"),
+                     ("code_symbols", "SELECT COUNT(*) FROM code_symbols")):
+        try:
+            try:
+                from agi_memory.layers.base import open_db as _open
+            except ImportError:
+                from layers.base import open_db as _open  # type: ignore
+            con = _open(Path(report.get("db_path") or ""), readonly=True)
+            try:
+                report[key] = int(con.execute(sql).fetchone()[0])
+            finally:
+                con.close()
+        except Exception:
+            report[key] = -1
+    try:
+        try:
+            from agi_memory import sync as _sync
+        except ImportError:
+            import sync as _sync  # type: ignore
+        st = _sync.sync_status()
+        report["vault_git"] = bool(st.get("is_git_repo"))
+        report["vault_remote"] = st.get("remote_url") or ""
+        report["vault_sync_status"] = st.get("last_sync_status")
+    except Exception:
+        report["vault_git"] = False
+    tools = []
+    for tool in INTEGRATIONS:
+        try:
+            tools.append({"tool": tool.name, "detected": bool(tool.is_detected()),
+                          "configured": bool(tool.is_configured(scope)),
+                          "rules": bool(tool.are_rules_installed(scope))})
+        except Exception:
+            tools.append({"tool": tool.name, "detected": False, "configured": False, "rules": False})
+    report["tools"] = tools
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+    print(f"\nagent-memory Doctor (scope: {scope})")
+    print(f"  Python:       {report['python']}")
+    print(f"  Server:       {report['server']} ({'found' if report['server_exists'] else 'MISSING'})")
+    print(f"  Database:     {report.get('db_path')} ({report.get('db_bytes', 0)} bytes)")
+    print(f"  Observations: {report['observations']}  Sessions: {report['sessions']}  Symbols: {report['code_symbols']}")
+    print(f"  Vault git:    {'yes' if report.get('vault_git') else 'no'}  Remote: {report.get('vault_remote') or '(none)'}")
+    print(f"\n  {'Tool':<22} {'Detected':<10} {'Configured':<12} Rules")
+    for t in tools:
+        print(f"  {t['tool']:<22} {'yes' if t['detected'] else '-':<10} "
+              f"{'yes' if t['configured'] else 'no':<12} {'yes' if t['rules'] else 'no'}")
+    print()
+
+
 def cmd_uninstall(args: argparse.Namespace) -> None:
     scope = args.scope
     targets = args.tools
@@ -1664,6 +1751,11 @@ def main() -> None:
     p_status = subparsers.add_parser("status", help="Show status of detected tools and MCP wiring")
     p_status.add_argument("--scope", choices=["user", "project"], default="user", help="Check user or project config")
 
+    # doctor
+    p_doctor = subparsers.add_parser("doctor", help="Parity check: one view proving every tool sees the same memory")
+    p_doctor.add_argument("--scope", choices=["user", "project"], default="user", help="Check user or project config")
+    p_doctor.add_argument("--json", action="store_true", help="Output raw JSON")
+
     # install
     p_install = subparsers.add_parser("install", help="Configure MCP server and rules for specified tools")
     p_install.add_argument("tools", nargs="+", help="Tool names (e.g. claude, cursor, codex, hermes, aider) or 'all'")
@@ -1727,6 +1819,8 @@ def main() -> None:
 
     if args.command == "status":
         cmd_status(args)
+    elif args.command == "doctor":
+        cmd_doctor(args)
     elif args.command == "install":
         cmd_install(args)
     elif args.command == "bootstrap":
