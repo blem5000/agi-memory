@@ -1,5 +1,12 @@
 # agi-memory
 
+> **Retired.** This project is archived and no longer maintained. Its successor
+> for shared coding-agent memory is
+> [deja-vu](https://github.com/vshulcz/deja-vu), which builds the memory layer
+> from session history already on disk instead of record-forward notes.
+> Install it with `curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh`
+> followed by `deja install --auto`.
+
 [![CI](https://github.com/kdbhalala/agi-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/kdbhalala/agi-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/agi-memory.svg)](https://pypi.org/project/agi-memory/)
 
