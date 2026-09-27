@@ -1082,6 +1082,99 @@ def offer_history_import(non_interactive: bool = False, assume_yes: bool = False
     return res
 
 
+def _entries_in(path: Path, server_id: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """(scope label, entry) for every registration of `server_id` in one file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    out = []
+    entry = (data.get("mcpServers") or {}).get(server_id)
+    if isinstance(entry, dict):
+        out.append(("user", entry))
+    for proj, cfg in (data.get("projects") or {}).items():
+        entry = ((cfg or {}).get("mcpServers") or {}).get(server_id)
+        if isinstance(entry, dict):
+            out.append((f"local:{proj}", entry))
+    return out
+
+
+def find_conflicting_scopes(server_id: str = "agi-memory") -> List[Dict[str, Any]]:
+    """Registrations of one server id that collide *within a single assistant*.
+
+    The same id in eight different assistants' config files is correct and
+    expected -- that is what "integrated with everything" looks like. The bug is
+    one assistant finding it in two scopes at once: Claude Code reads the user
+    config, a project's `.mcp.json`, and the per-project blocks inside the user
+    config, and nothing in any of them notices the others. The result is a
+    session-start "conflicting scopes" warning -- or, when the losing scope's
+    interpreter has since been deleted, a server that cannot start at all while
+    still looking configured.
+
+    Read-only: this reports, it never edits. Which registration wins is the
+    user's call, and a tool that silently rewrites another scope's config is a
+    tool that eventually breaks someone's setup.
+    """
+    conflicts: List[Dict[str, Any]] = []
+    for tool in INTEGRATIONS:
+        paths: List[Tuple[str, Path]] = []
+        for scope in ("user", "project"):
+            try:
+                paths.append((scope, Path(tool.get_config_path(scope))))
+            except Exception:
+                continue
+        if tool.name == "claude":
+            # Claude Code also reads the project-local .mcp.json.
+            paths.append(("mcp.json", Path.cwd() / ".mcp.json"))
+        seen: set = set()
+        for scope, path in paths:
+            if not path.exists():
+                continue
+            key = str(path.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            for where, entry in _entries_in(path, server_id):
+                cmd = str(entry.get("command") or "")
+                conflicts.append({
+                    "tool": tool.name,
+                    "scope": scope,
+                    "where": where,
+                    "path": str(path),
+                    "command": cmd,
+                    "exists": bool(cmd) and Path(cmd).exists(),
+                })
+    return conflicts
+
+
+def report_scope_conflicts(server_id: str = "agi-memory") -> List[Dict[str, Any]]:
+    """Warn when one assistant finds the same server id in two scopes."""
+    try:
+        rows = find_conflicting_scopes(server_id)
+    except Exception:
+        return []
+    by_tool: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_tool.setdefault(r["tool"], []).append(r)
+    clashes = {t: rs for t, rs in by_tool.items() if len(rs) > 1}
+    if not clashes:
+        return rows
+    print(f"\n[!] '{server_id}' is registered in more than one scope. Claude Code warns")
+    print("    about conflicting scopes at session start, and OAuth tokens do not carry")
+    print("    between them. Keep one:\n")
+    for tool, rs in clashes.items():
+        print(f"  {tool}:")
+        for r in rs:
+            state = "ok" if r["exists"] else "MISSING INTERPRETER -- cannot start"
+            print(f"    {r['scope']:<10} {state}")
+            print(f"      {r['command'] or '(no command)'}")
+            print(f"      in {r['path']}")
+    print()
+    return rows
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     py_path = args.python or detect_python()
     srv_path = args.server or detect_server()
@@ -1163,6 +1256,10 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     if not getattr(args, "skip_bootstrap", False):
         setup_bootstrap_interactive(non_interactive=getattr(args, "yes", False))
+
+    # After writing our own config: if the same server id is already claimed
+    # somewhere else, say so now, while the user is looking at the installer.
+    report_scope_conflicts("agi-memory")
 
     # After the repo's own memories, so the offer sits last and the user's very
     # first prompt already has their history behind it.
@@ -1484,6 +1581,20 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     for t in tools:
         print(f"  {t['tool']:<22} {'yes' if t['detected'] else '-':<10} "
               f"{'yes' if t['configured'] else 'no':<12} {'yes' if t['rules'] else 'no'}")
+    # One server id in two scopes is a session-start warning for the user, and
+    # a dead server when the losing scope's interpreter is gone.
+    try:
+        conflicts = find_conflicting_scopes("agi-memory")
+    except Exception:
+        conflicts = []
+    report["mcp_scopes"] = conflicts
+    if len(conflicts) > 1:
+        print(f"\n  [!] 'agi-memory' registered in {len(conflicts)} places "
+              f"({sum(1 for c in conflicts if not c['exists'])} with a missing interpreter):")
+        for c in conflicts:
+            print(f"      {c['where']:<26} {'ok' if c['exists'] else 'CANNOT START'}")
+    elif conflicts:
+        print(f"\n  MCP scope: {conflicts[0]['where']} (single registration)")
     # Assistants without hooks still get sessions and recall over MCP, so this
     # table is about what fires unasked, not about what works.
     print(f"\n  {'Hooks':<22} {'Point-of-action':<26} Installed")

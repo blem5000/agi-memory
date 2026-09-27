@@ -110,6 +110,37 @@ conversations as protobuf blobs with no published schema, so reading them means
 guessing at a private wire format. The rest have no reader yet — the installer
 says so rather than quietly implying full coverage.
 
+### One Server, One Scope
+
+If the same server id is registered in two scopes of the same assistant, Claude
+Code warns at session start:
+
+```
+[Conflicting scopes] Server "agi-memory" is defined in multiple scopes with
+different endpoints ... OAuth tokens are stored per endpoint
+```
+
+The dangerous version is quiet: the losing scope's interpreter gets deleted (a
+project `.venv` removed, a Homebrew upgrade), and that registration sits in your
+config looking fine while being unable to start. `agi-integrate install` and
+`agi-integrate doctor` both report it, naming the file and the scope:
+
+```
+[!] 'agi-memory' is registered in more than one scope. ...
+  claude:
+    user       MISSING INTERPRETER -- cannot start
+      /Users/you/project/.venv/bin/python
+      in /Users/you/.claude.json
+    user       ok
+      /opt/homebrew/bin/python3
+```
+
+Keep one. The report is read-only on purpose — which registration wins is your
+call, and a tool that silently rewrites another scope's config eventually breaks
+the setup it was meant to fix. The same id appearing in *different* assistants'
+config files is expected, not a conflict: that is what being integrated with
+everything looks like.
+
 ### 3. Verify MCP Handshake
 Validate the stdio protocol and tool registrations:
 ```bash
