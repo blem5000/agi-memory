@@ -1,8 +1,8 @@
-# agent-memory Integrations Guide
+# agi-memory Integrations Guide
 
 Turnkey cross-agent memory integration for leading AI coding CLIs and IDEs.
 
-`agent-memory` exposes a unified Model Context Protocol (MCP) server that connects your AI coding assistants to a turnkey, zero-dependency four-pillar cognitive memory framework:
+`agi-memory` exposes a unified Model Context Protocol (MCP) server that connects your AI coding assistants to a turnkey, zero-dependency four-pillar cognitive memory framework:
 - **L1 Epistemic Working Memory (`SessionLayer`)**: Rapid, zero-token session working memory (<2ms via SQLite FTS5). Captures recent decisions, bugfixes, tool executions, and file-level constraints.
 - **L2 Semantic Knowledge Graph (`GraphLayer`)**: Native SQLite knowledge graph with multi-hop recursive traversal (<0.35ms) for architectural principles, long-term trade-offs, and cross-project rules.
 - **L3 Episodic Session History (`EpisodicLayer`)**: Session lifecycle tracking, timelines, touched files, commit deltas, and cross-session recaps.
@@ -184,14 +184,14 @@ If you prefer manual configuration or need to configure a custom environment, co
 
 #### Option A: 1-Line CLI
 ```bash
-claude mcp add --scope user agent-memory -- <PYTHON> <SERVER>
+claude mcp add --scope user agi-memory -- <PYTHON> <SERVER>
 ```
 
 #### Option B: Config File (`~/.claude.json`)
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "type": "stdio",
       "command": "<PYTHON>",
       "args": ["<SERVER>"],
@@ -203,10 +203,10 @@ claude mcp add --scope user agent-memory -- <PYTHON> <SERVER>
 
 #### Global Rule (`~/.claude/CLAUDE.md` or workspace `CLAUDE.md`)
 ```markdown
-# Agent Memory Discipline (agent-memory MCP)
+# Agent Memory Discipline (agi-memory MCP)
 
 When working on non-trivial tasks, debugging errors, or establishing patterns:
-1. **Recall Prior Precedents**: Call `memory_recall` on the `agent-memory` MCP server with relevant keywords and project name to check past decisions and established patterns before making assumptions.
+1. **Recall Prior Precedents**: Call `memory_recall` on the `agi-memory` MCP server with relevant keywords and project name to check past decisions and established patterns before making assumptions.
 2. **Deep Architecture Search**: If L1 recall is thin or high-level architecture/cross-project context is needed, use `memory_recall_deep`.
 3. **Record Verified Learnings**: When settling an architectural pattern, fixing a recurring bug, or agreeing on project conventions, call `memory_record` so all coding agents stay in sync.
 ```
@@ -219,7 +219,7 @@ When working on non-trivial tasks, debugging errors, or establishing patterns:
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"]
     }
@@ -230,14 +230,14 @@ When working on non-trivial tasks, debugging errors, or establishing patterns:
 #### Rule File (`~/.cursor/rules/agent-memory.mdc`)
 ```markdown
 ---
-description: Proactive memory recall and recording using agent-memory MCP
+description: Proactive memory recall and recording using agi-memory MCP
 alwaysApply: true
 ---
 
-# Agent Memory Discipline (agent-memory MCP)
+# Agent Memory Discipline (agi-memory MCP)
 
 When starting non-trivial tasks, debugging errors, or making architectural decisions:
-1. **Recall Prior Precedents**: Call `memory_recall` on `agent-memory` MCP with relevant keywords and project name to check past decisions and established patterns.
+1. **Recall Prior Precedents**: Call `memory_recall` on `agi-memory` MCP with relevant keywords and project name to check past decisions and established patterns.
 2. **Deep Search**: If L1 recall is thin or foundational architecture is involved, use `memory_recall_deep`.
 3. **Record Learnings**: When settling an architectural pattern or resolving a non-trivial bug, call `memory_record` to save the decision for all agents.
 ```
@@ -250,7 +250,7 @@ When starting non-trivial tasks, debugging errors, or making architectural decis
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"]
     }
@@ -267,7 +267,7 @@ Append the standard Memory Discipline section from above.
 
 #### Config (`~/.codex/config.toml`)
 ```toml
-[mcp_servers.agent-memory]
+[mcp_servers.agi-memory]
 command = "<PYTHON>"
 args = ["<SERVER>"]
 ```
@@ -283,7 +283,7 @@ Append the standard Memory Discipline section from above.
 ```json
 {
   "mcp": {
-    "agent-memory": {
+    "agi-memory": {
       "type": "local",
       "command": ["<PYTHON>", "<SERVER>"],
       "enabled": true
@@ -300,10 +300,10 @@ Append the standard Memory Discipline section from above.
 
 #### Lifecycle hooks (plugin — OpenCode has no native hook config)
 ```bash
-agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agent-memory.js
-agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agent-memory.js
+agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agi-memory.js
+agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agi-memory.js
 ```
-The generated zero-dependency plugin (`export default { id: "agent-memory", async setup(ctx) {} }`)
+The generated zero-dependency plugin (`export default { id: "agi-memory", async setup(ctx) {} }`)
 shells out via `execFileSync(PY, [HOOKS_PY, verb], { input })`: session-start and
 user-prompt-submit via `ctx.session.hook("prompt", ...)`, injection via
 `ctx.session.hook("context", (e) => e.system.push({ type: "text", text }))`,
@@ -318,7 +318,7 @@ pre-compact via `ctx.session.hook("compaction", ...)`, session-end via
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"],
       "disabled": false
@@ -386,7 +386,7 @@ Append the standard Memory Discipline section from above.
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"],
       "disabled": false,
@@ -407,7 +407,7 @@ Append the standard Memory Discipline section from above.
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"]
     }
@@ -419,7 +419,7 @@ Append the standard Memory Discipline section from above.
 ```json
 {
   "mcpServers": {
-    "agent-memory": {
+    "agi-memory": {
       "command": "<PYTHON>",
       "args": ["<SERVER>"]
     }

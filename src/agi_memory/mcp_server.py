@@ -644,7 +644,7 @@ def run_mcp_server():
 
 def cmd_log(argv: list[str]) -> None:
     import argparse
-    parser = argparse.ArgumentParser(prog="agent-memory log", description="List recent observations")
+    parser = argparse.ArgumentParser(prog="agi-memory log", description="List recent observations")
     parser.add_argument("--limit", "-n", type=int, default=20, help="Max observations to display (default: 20)")
     parser.add_argument("--project", "-p", default=None, help="Filter by project name")
     parser.add_argument("--all", action="store_true", help="Include superseded observations")
@@ -710,7 +710,7 @@ def cmd_inspect(argv: list[str]) -> None:
 
 def cmd_delete(argv: list[str]) -> None:
     import argparse
-    parser = argparse.ArgumentParser(prog="agent-memory delete", description="Delete or supersede an observation")
+    parser = argparse.ArgumentParser(prog="agi-memory delete", description="Delete or supersede an observation")
     parser.add_argument("id", help="Observation ID (#123 or 123)")
     parser.add_argument("--hard", action="store_true", help="Permanently delete from database instead of soft-deleting")
     args = parser.parse_args(argv)
@@ -762,7 +762,7 @@ def cmd_delete(argv: list[str]) -> None:
 
 def cmd_pin(argv: list[str]) -> None:
     import argparse
-    parser = argparse.ArgumentParser(prog="agent-memory pin", description="Pin a critical rule or invariant to core memory")
+    parser = argparse.ArgumentParser(prog="agi-memory pin", description="Pin a critical rule or invariant to core memory")
     parser.add_argument("key", help="Unique identifier for the block")
     parser.add_argument("content", help="Rule or constraint content")
     parser.add_argument("--category", "-c", default="system", help="Category (default: system)")
@@ -866,7 +866,7 @@ def cmd_alias(argv: list[str]) -> None:
 
 def cmd_blocks(argv: list[str]) -> None:
     import argparse
-    parser = argparse.ArgumentParser(prog="agent-memory blocks", description="List core memory blocks")
+    parser = argparse.ArgumentParser(prog="agi-memory blocks", description="List core memory blocks")
     parser.add_argument("--project", "-p", default=None, help="Filter by project")
     args = parser.parse_args(argv)
 
@@ -890,7 +890,7 @@ def cmd_blocks(argv: list[str]) -> None:
 
 def cmd_recall(argv: list[str]) -> None:
     import argparse
-    parser = argparse.ArgumentParser(prog="agent-memory recall", description="Search working & durable memory")
+    parser = argparse.ArgumentParser(prog="agi-memory recall", description="Search working & durable memory")
     parser.add_argument("query", help="Search query")
     parser.add_argument("--project", "-p", default=None, help="Project name filter")
     parser.add_argument("--deep", action="store_true", help="Search L2 knowledge graph as well")

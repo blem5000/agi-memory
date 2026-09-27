@@ -48,10 +48,10 @@ REPO_DIR = Path(__file__).resolve().parent
 DEFAULT_SERVER = REPO_DIR / "mcp_server.py"
 
 MEMORY_RULES_MD = """<!-- AGENT_MEMORY_DISCIPLINE_START -->
-# Agent Memory Discipline (agent-memory MCP)
+# Agent Memory Discipline (agi-memory MCP)
 
 When working on non-trivial tasks, debugging errors, or establishing patterns:
-1. **Recall Prior Precedents**: Call `memory_recall` on the `agent-memory` MCP server with relevant keywords and project name to check past decisions and established patterns before making assumptions.
+1. **Recall Prior Precedents**: Call `memory_recall` on the `agi-memory` MCP server with relevant keywords and project name to check past decisions and established patterns before making assumptions.
 2. **Deep Architecture Search**: If L1 recall is thin or high-level architecture/cross-project context is needed, use `memory_recall_deep`.
 3. **Record Verified Learnings**: When settling an architectural pattern, fixing a recurring bug, or agreeing on project conventions, call `memory_record(text, title, project, category, supersedes, relations)`.
    - Specify `supersedes="#<id>"` if this overrides an earlier decision.
@@ -60,14 +60,14 @@ When working on non-trivial tasks, debugging errors, or establishing patterns:
 """
 
 CURSOR_RULES_MDC = """---
-description: Proactive memory recall and recording using agent-memory MCP
+description: Proactive memory recall and recording using agi-memory MCP
 alwaysApply: true
 ---
 
-# Agent Memory Discipline (agent-memory MCP)
+# Agent Memory Discipline (agi-memory MCP)
 
 When starting non-trivial tasks, debugging errors, or making architectural decisions:
-1. **Recall Prior Precedents**: Call `memory_recall` on `agent-memory` MCP with relevant keywords and project name to check past decisions and established patterns.
+1. **Recall Prior Precedents**: Call `memory_recall` on `agi-memory` MCP with relevant keywords and project name to check past decisions and established patterns.
 2. **Deep Search**: If L1 recall is thin or foundational architecture is involved, use `memory_recall_deep`.
 3. **Record Learnings**: When settling an architectural pattern or resolving a non-trivial bug, call `memory_record(text, title, project, category, supersedes, relations)` to save the decision for all agents, specifying `supersedes` or `relations` when applicable.
 """
@@ -75,7 +75,7 @@ When starting non-trivial tasks, debugging errors, or making architectural decis
 AIDER_RULES_MD = """<!-- AGENT_MEMORY_DISCIPLINE_START -->
 # Agent Memory Discipline
 
-Use the `agent-memory` MCP server tools before making assumptions:
+Use the `agi-memory` MCP server tools before making assumptions:
 - `memory_recall(query, project)`: Retrieve recent session decisions, patterns, or bug fixes.
 - `memory_recall_deep(query, project)`: Retrieve durable architecture rules and decisions.
 - `memory_record(text, title, project, category, supersedes, relations)`: Record newly resolved patterns, fixes, or rules.
@@ -84,7 +84,7 @@ Use the `agent-memory` MCP server tools before making assumptions:
 
 
 def detect_python() -> str:
-    """Find the best python executable for the agent-memory MCP server."""
+    """Find the best python executable for the agi-memory MCP server."""
     venv_py = REPO_DIR / ".venv" / "bin" / "python"
     if venv_py.exists():
         return str(venv_py)
@@ -985,7 +985,7 @@ INTEGRATION_MAP = {t.name: t for t in INTEGRATIONS}
 
 def cmd_status(args: argparse.Namespace) -> None:
     scope = args.scope
-    print(f"\nagent-memory Tool Integrations Status (scope: {scope})")
+    print(f"\nagi-memory Tool Integrations Status (scope: {scope})")
     print("=" * 78)
     print(f"{'Tool':<22} {'Detected':<10} {'Configured':<12} {'Rules':<10} {'Config Path'}")
     print("-" * 78)
@@ -1002,7 +1002,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     print("-" * 78)
     print("Detected: CLI binary or config directory found on machine")
-    print("Configured: agent-memory MCP server entry present in tool config")
+    print("Configured: agi-memory MCP server entry present in tool config")
     print("Rules: Memory discipline rules or skills injected\n")
 
 
@@ -1272,7 +1272,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
     action = getattr(args, "action", "status") or "status"
     if action == "status":
         st = sync.sync_status()
-        print(f"\nagent-memory Vault Status:")
+        print(f"\nagi-memory Vault Status:")
         print(f"  Directory:    {st['vault_dir']}")
         print(f"  Git Repo:     {'✓ Yes' if st['is_git_repo'] else '✗ No'}")
         print(f"  Remote URL:   {st['remote_url'] or '(none)'}")
@@ -1283,7 +1283,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
             print(f"  Last Synced:  {t_str}")
         print(f"  GitHub CLI:   {'✓ Authenticated (' + str(st['gh_username']) + ')' if st['gh_authenticated'] else ('Installed (Not logged in)' if st['gh_available'] else 'Not Installed')}\n")
     elif action == "now":
-        print("Synchronizing agent-memory vault with remote Git repository...")
+        print("Synchronizing agi-memory vault with remote Git repository...")
         res = sync.sync(push=True, pull=True)
         print(f"Sync status: {res['status']}")
         if res.get("dedupe") and res["dedupe"].get("observations_pruned", 0) > 0:
@@ -1381,7 +1381,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     if as_json:
         print(json.dumps(report, indent=2))
         return
-    print(f"\nagent-memory Doctor (scope: {scope})")
+    print(f"\nagi-memory Doctor (scope: {scope})")
     print(f"  Python:       {report['python']}")
     print(f"  Server:       {report['server']} ({'found' if report['server_exists'] else 'MISSING'})")
     print(f"  Database:     {report.get('db_path')} ({report.get('db_bytes', 0)} bytes)")
@@ -1439,7 +1439,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     py_path = args.python or detect_python()
     srv_path = args.server or detect_server()
 
-    print(f"Testing agent-memory MCP server over stdio:")
+    print(f"Testing agi-memory MCP server over stdio:")
     print(f"  Command: {py_path} {srv_path}")
 
     try:
@@ -1530,7 +1530,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     if not getattr(args, "name", None):
         proj_name = _analyze.detect_project_name(target) or proj_name
 
-    print(f"\nWiring {target} for agent-memory (Project: {proj_name})...\n")
+    print(f"\nWiring {target} for agi-memory (Project: {proj_name})...\n")
 
     def _write_file(rel_path: str, content: str) -> None:
         p = target / rel_path
@@ -1568,7 +1568,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 Universal executive index and rules for Claude Code, Cursor, Codex, OpenCode, Antigravity, Hermes Agent, and all major assistants.
 
-## Memory Discipline (agent-memory MCP)
+## Memory Discipline (agi-memory MCP)
 
 When working in this project:
 1. **Recall Prior Precedents**: Call `memory_recall(query, project="{proj_name}")` before making assumptions about architecture, conventions, or past fixes.

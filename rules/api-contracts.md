@@ -1,6 +1,6 @@
 # API Contracts & MCP Tool Interfaces
 
-The `agent-memory` MCP server communicates via standard JSON-RPC 2.0 over `stdio`.
+The `agi-memory` MCP server communicates via standard JSON-RPC 2.0 over `stdio`.
 
 ## Tool Specifications
 
