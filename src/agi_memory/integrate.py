@@ -1449,6 +1449,22 @@ def cmd_generate(args: argparse.Namespace) -> None:
         print(rules)
 
 
+def _expected_tools() -> list:
+    """Tool names the server must advertise, read from the server itself.
+
+    A copy of this list here went stale the moment a tool was added, so the
+    handshake check passed without ever looking at the new ones.
+    """
+    try:
+        try:
+            from agi_memory import mcp_server as srv
+        except ImportError:
+            import mcp_server as srv  # type: ignore
+        return [t["name"] for t in srv.TOOLS]
+    except Exception:
+        return []
+
+
 def cmd_test(args: argparse.Namespace) -> None:
     py_path = args.python or detect_python()
     srv_path = args.server or detect_server()
@@ -1503,26 +1519,23 @@ def cmd_test(args: argparse.Namespace) -> None:
         tools_req = {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
         tools_res = send_rpc(tools_req)
         tools = [t.get("name") for t in tools_res.get("result", {}).get("tools", [])]
-        expected_tools = [
-            "memory_recall", "memory_recall_deep", "memory_record",
-            "memory_promote", "memory_sync", "memory_pin", "memory_unpin", "memory_blocks",
-            "memory_bootstrap", "memory_timeline", "code_structure", "code_callers",
-            "code_dependencies", "code_impact", "code_index"
-        ]
+        expected_tools = _expected_tools()
         for exp in expected_tools:
-            if exp in tools:
-                print(f"  [✓] tool registered: {exp}")
-            else:
-                print(f"  [✗] tool missing: {exp}")
+            ok = exp in tools
+            print(f"  {'[✓]' if ok else '[✗]'} tool "
+                  f"{'registered' if ok else 'MISSING'}: {exp}")
 
-        all_ok = all(exp in tools for exp in expected_tools)
-        if all_ok:
-            print("\nAll MCP server handshake checks passed successfully!")
-        else:
-            print("\nSome tool checks failed.")
+        missing = [t for t in expected_tools if t not in tools]
+        if missing:
+            print(f"\n{len(missing)} tool(s) missing from tools/list: {', '.join(missing)}")
+            raise SystemExit(1)
+        print(f"\nAll {len(expected_tools)} MCP server handshake checks passed successfully!")
 
+    except SystemExit:
+        raise
     except Exception as e:
         print(f"  [✗] MCP communication error: {e}")
+        raise SystemExit(1)
     finally:
         proc.terminate()
 
