@@ -313,6 +313,11 @@ class ToolIntegration:
     """Base class for tool integrations."""
     name: str
     display_name: str
+    # MCP server id written into tool configs. Renamed from the legacy
+    # "agent-memory" in 0.9.1; install migrates the old key, uninstall
+    # removes both.
+    server_id: str = "agi-memory"
+    legacy_server_id: str = "agent-memory"
 
     def is_detected(self) -> bool:
         raise NotImplementedError
@@ -363,7 +368,7 @@ class JsonMcpToolIntegration(ToolIntegration):
 
     def is_configured(self, scope: str = "user") -> bool:
         cfg = read_json_safe(self.get_config_path(scope))
-        return cfg is not None and "agent-memory" in cfg.get(self.mcp_key, {})
+        return cfg is not None and self.server_id in cfg.get(self.mcp_key, {})
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -377,7 +382,8 @@ class JsonMcpToolIntegration(ToolIntegration):
         cfg = read_json_safe(cfg_path) or {}
         if self.mcp_key not in cfg:
             cfg[self.mcp_key] = {}
-        cfg[self.mcp_key]["agent-memory"] = self._server_entry(py_path, srv_path)
+        cfg[self.mcp_key].pop(self.legacy_server_id, None)
+        cfg[self.mcp_key][self.server_id] = self._server_entry(py_path, srv_path)
         write_json_safe(cfg_path, cfg)
 
         rules_path = self.get_rules_path(scope)
@@ -405,8 +411,9 @@ class JsonMcpToolIntegration(ToolIntegration):
     def uninstall(self, scope: str = "user") -> Tuple[bool, str]:
         cfg_path = self.get_config_path(scope)
         cfg = read_json_safe(cfg_path)
-        if cfg and self.mcp_key in cfg and "agent-memory" in cfg[self.mcp_key]:
-            del cfg[self.mcp_key]["agent-memory"]
+        if cfg and self.mcp_key in cfg:
+            cfg[self.mcp_key].pop(self.server_id, None)
+            cfg[self.mcp_key].pop(self.legacy_server_id, None)
             write_json_safe(cfg_path, cfg)
         rules_path = self.get_rules_path(scope)
         if rules_path:
@@ -420,7 +427,7 @@ class JsonMcpToolIntegration(ToolIntegration):
     def generate_config(self, py_path: str, srv_path: str) -> str:
         return json.dumps({
             self.mcp_key: {
-                "agent-memory": self._server_entry(py_path, srv_path)
+                self.server_id: self._server_entry(py_path, srv_path)
             }
         }, indent=2)
 
@@ -514,7 +521,7 @@ class CodexIntegration(ToolIntegration):
         if not p.exists():
             return False
         content = p.read_text(encoding="utf-8")
-        return "[mcp_servers.agent-memory]" in content
+        return f"[mcp_servers.{self.server_id}]" in content
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -525,10 +532,12 @@ class CodexIntegration(ToolIntegration):
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         content = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
 
-        snippet = f'\n[mcp_servers.agent-memory]\ncommand = "{py_path}"\nargs = ["{srv_path}"]\n'
-        if "[mcp_servers.agent-memory]" not in content:
+        snippet = f'\n[mcp_servers.{self.server_id}]\ncommand = "{py_path}"\nargs = ["{srv_path}"]\n'
+        legacy = re.compile(rf'\[mcp_servers\.{self.legacy_server_id}\]\s*command\s*=\s*".*?"\s*args\s*=\s*\[.*?\]\n?', re.DOTALL)
+        content = legacy.sub("", content)
+        if f"[mcp_servers.{self.server_id}]" not in content:
             content = content.rstrip() + "\n" + snippet
-            cfg_path.write_text(content, encoding="utf-8")
+        cfg_path.write_text(content, encoding="utf-8")
 
         rules_path = self.get_rules_path(scope)
         if rules_path:
@@ -540,16 +549,18 @@ class CodexIntegration(ToolIntegration):
         cfg_path = self.get_config_path(scope)
         if cfg_path.exists():
             content = cfg_path.read_text(encoding="utf-8")
-            pattern = re.compile(r'\[mcp_servers\.agent-memory\]\s*command\s*=\s*".*?"\s*args\s*=\s*\[.*?\]\n?', re.DOTALL)
-            new_content = pattern.sub("", content)
-            cfg_path.write_text(new_content, encoding="utf-8")
+            for sid in (self.server_id, self.legacy_server_id):
+                pattern = re.compile(rf'\[mcp_servers\.{sid}\]\s*command\s*=\s*".*?"\s*args\s*=\s*\[.*?\]\n?', re.DOTALL)
+                new_content = pattern.sub("", content)
+                content = new_content
+            cfg_path.write_text(content, encoding="utf-8")
         rules_path = self.get_rules_path(scope)
         if rules_path:
             remove_rules_safe(rules_path)
         return True, f"Removed from {cfg_path}"
 
     def generate_config(self, py_path: str, srv_path: str) -> str:
-        return f'[mcp_servers.agent-memory]\ncommand = "{py_path}"\nargs = ["{srv_path}"]'
+        return f'[mcp_servers.{self.server_id}]\ncommand = "{py_path}"\nargs = ["{srv_path}"]'
 
 
 class OpenCodeIntegration(ToolIntegration):
@@ -578,7 +589,7 @@ class OpenCodeIntegration(ToolIntegration):
 
     def is_configured(self, scope: str = "user") -> bool:
         cfg = read_json_safe(self.get_config_path(scope))
-        return cfg is not None and "agent-memory" in cfg.get("mcp", {})
+        return cfg is not None and self.server_id in cfg.get("mcp", {})
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -589,7 +600,8 @@ class OpenCodeIntegration(ToolIntegration):
         cfg = read_json_safe(cfg_path) or {}
         if "mcp" not in cfg:
             cfg["mcp"] = {}
-        cfg["mcp"]["agent-memory"] = {
+        cfg["mcp"].pop(self.legacy_server_id, None)
+        cfg["mcp"][self.server_id] = {
             "type": "local",
             "command": [py_path, srv_path],
             "enabled": True
@@ -610,8 +622,9 @@ class OpenCodeIntegration(ToolIntegration):
     def uninstall(self, scope: str = "user") -> Tuple[bool, str]:
         cfg_path = self.get_config_path(scope)
         cfg = read_json_safe(cfg_path)
-        if cfg and "mcp" in cfg and "agent-memory" in cfg["mcp"]:
-            del cfg["mcp"]["agent-memory"]
+        if cfg and "mcp" in cfg:
+            cfg["mcp"].pop(self.server_id, None)
+            cfg["mcp"].pop(self.legacy_server_id, None)
             write_json_safe(cfg_path, cfg)
         rules_path = self.get_rules_path(scope)
         if rules_path:
@@ -621,7 +634,7 @@ class OpenCodeIntegration(ToolIntegration):
     def generate_config(self, py_path: str, srv_path: str) -> str:
         return json.dumps({
             "mcp": {
-                "agent-memory": {
+                self.server_id: {
                     "type": "local",
                     "command": [py_path, srv_path],
                     "enabled": True
@@ -683,7 +696,7 @@ class AiderIntegration(ToolIntegration):
         if not p.exists():
             return False
         content = p.read_text(encoding="utf-8")
-        return "agent-memory:" in content
+        return f"{self.server_id}:" in content
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -695,12 +708,13 @@ class AiderIntegration(ToolIntegration):
         content = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
 
         child_lines = [
-            "agent-memory:",
+            f"{self.server_id}:",
             f"  command: {py_path}",
             "  args:",
             f"    - {srv_path}"
         ]
-        new_content = inject_yaml_subdict(content, "mcp-servers", "agent-memory", child_lines)
+        new_content = inject_yaml_subdict(content, "mcp-servers", self.server_id, child_lines)
+        new_content = remove_yaml_subdict(new_content, "mcp-servers", self.legacy_server_id)
         cfg_path.write_text(new_content, encoding="utf-8")
 
         rules_path = self.get_rules_path(scope)
@@ -713,7 +727,8 @@ class AiderIntegration(ToolIntegration):
         cfg_path = self.get_config_path(scope)
         if cfg_path.exists():
             content = cfg_path.read_text(encoding="utf-8")
-            new_content = remove_yaml_subdict(content, "mcp-servers", "agent-memory")
+            new_content = remove_yaml_subdict(content, "mcp-servers", self.server_id)
+            new_content = remove_yaml_subdict(new_content, "mcp-servers", self.legacy_server_id)
             cfg_path.write_text(new_content, encoding="utf-8")
         rules_path = self.get_rules_path(scope)
         if rules_path:
@@ -721,7 +736,7 @@ class AiderIntegration(ToolIntegration):
         return True, f"Removed from {cfg_path}"
 
     def generate_config(self, py_path: str, srv_path: str) -> str:
-        return f"mcp-servers:\n  agent-memory:\n    command: {py_path}\n    args:\n      - {srv_path}"
+        return f"mcp-servers:\n  {self.server_id}:\n    command: {py_path}\n    args:\n      - {srv_path}"
 
     def generate_rules(self) -> str:
         return AIDER_RULES_MD.strip()
@@ -750,7 +765,7 @@ class GooseIntegration(ToolIntegration):
         if not p.exists():
             return False
         content = p.read_text(encoding="utf-8")
-        return "agent-memory:" in content
+        return f"{self.server_id}:" in content
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -762,14 +777,15 @@ class GooseIntegration(ToolIntegration):
         content = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
 
         child_lines = [
-            "agent-memory:",
+            f"{self.server_id}:",
             "  type: stdio",
             f"  cmd: {py_path}",
             "  args:",
             f"    - {srv_path}",
             "  enabled: true"
         ]
-        new_content = inject_yaml_subdict(content, "extensions", "agent-memory", child_lines)
+        new_content = inject_yaml_subdict(content, "extensions", self.server_id, child_lines)
+        new_content = remove_yaml_subdict(new_content, "extensions", self.legacy_server_id)
         cfg_path.write_text(new_content, encoding="utf-8")
 
         rules_path = self.get_rules_path(scope)
@@ -782,7 +798,8 @@ class GooseIntegration(ToolIntegration):
         cfg_path = self.get_config_path(scope)
         if cfg_path.exists():
             content = cfg_path.read_text(encoding="utf-8")
-            new_content = remove_yaml_subdict(content, "extensions", "agent-memory")
+            new_content = remove_yaml_subdict(content, "extensions", self.server_id)
+            new_content = remove_yaml_subdict(new_content, "extensions", self.legacy_server_id)
             cfg_path.write_text(new_content, encoding="utf-8")
         rules_path = self.get_rules_path(scope)
         if rules_path:
@@ -790,7 +807,7 @@ class GooseIntegration(ToolIntegration):
         return True, f"Removed from {cfg_path}"
 
     def generate_config(self, py_path: str, srv_path: str) -> str:
-        return f"extensions:\n  agent-memory:\n    type: stdio\n    cmd: {py_path}\n    args:\n      - {srv_path}\n    enabled: true"
+        return f"extensions:\n  {self.server_id}:\n    type: stdio\n    cmd: {py_path}\n    args:\n      - {srv_path}\n    enabled: true"
 
 
 class VSCodeExtensionIntegration(JsonMcpToolIntegration):
@@ -903,7 +920,7 @@ class HermesIntegration(ToolIntegration):
 
     def is_configured(self, scope: str = "user") -> bool:
         p = self.get_config_path(scope)
-        return p.exists() and "agent-memory:" in p.read_text(encoding="utf-8")
+        return p.exists() and f"{self.server_id}:" in p.read_text(encoding="utf-8")
 
     def are_rules_installed(self, scope: str = "user") -> bool:
         p = self.get_rules_path(scope)
@@ -915,13 +932,14 @@ class HermesIntegration(ToolIntegration):
         content = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
 
         child_lines = [
-            "agent-memory:",
+            f"{self.server_id}:",
             f"  command: {py_path}",
             "  args:",
             f"    - {srv_path}",
             "  enabled: true",
         ]
-        new_content = inject_yaml_subdict(content, "mcp_servers", "agent-memory", child_lines)
+        new_content = inject_yaml_subdict(content, "mcp_servers", self.server_id, child_lines)
+        new_content = remove_yaml_subdict(new_content, "mcp_servers", self.legacy_server_id)
         cfg_path.write_text(new_content, encoding="utf-8")
 
         rules_path = self.get_rules_path(scope)
@@ -934,14 +952,16 @@ class HermesIntegration(ToolIntegration):
         cfg_path = self.get_config_path(scope)
         if cfg_path.exists():
             content = cfg_path.read_text(encoding="utf-8")
-            cfg_path.write_text(remove_yaml_subdict(content, "mcp_servers", "agent-memory"), encoding="utf-8")
+            new_content = remove_yaml_subdict(content, "mcp_servers", self.server_id)
+            new_content = remove_yaml_subdict(new_content, "mcp_servers", self.legacy_server_id)
+            cfg_path.write_text(new_content, encoding="utf-8")
         rules_path = self.get_rules_path(scope)
         if rules_path:
             remove_rules_safe(rules_path)
         return True, f"Removed from {cfg_path}"
 
     def generate_config(self, py_path: str, srv_path: str) -> str:
-        return f"mcp_servers:\n  agent-memory:\n    command: {py_path}\n    args:\n      - {srv_path}\n    enabled: true"
+        return f"mcp_servers:\n  {self.server_id}:\n    command: {py_path}\n    args:\n      - {srv_path}\n    enabled: true"
 
 
 INTEGRATIONS: List[ToolIntegration] = [
@@ -1533,7 +1553,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     # 1. Root .mcp.json (Claude Code, Cursor, OpenCode)
     mcp_json = json.dumps({
         "mcpServers": {
-            "agent-memory": {
+            "agi-memory": {
                 "type": "stdio",
                 "command": py_path,
                 "args": [srv_path],
@@ -1628,7 +1648,7 @@ Always call `memory_recall` with project="{proj_name}" before modifying code, an
     # Cursor
     _write_file(".cursor/mcp.json", json.dumps({
         "mcpServers": {
-            "agent-memory": {
+            "agi-memory": {
                 "command": py_path,
                 "args": [srv_path]
             }

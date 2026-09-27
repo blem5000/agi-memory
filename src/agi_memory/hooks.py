@@ -941,7 +941,8 @@ def install_agy_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool, s
     cmd_start = f'"{py}" "{hooks_py}" session-start --reuse'
     cmd_end = f'"{py}" "{hooks_py}" session-end'
 
-    data["agent-memory"] = {
+    data.pop("agent-memory", None)  # legacy id, migrated in 0.9.1
+    data["agi-memory"] = {
         "enabled": True,
         "PreInvocation": [
             {
@@ -971,9 +972,10 @@ def uninstall_agy_hooks(scope: str = "user") -> Tuple[bool, str]:
     except Exception:
         return False, "Failed to parse hooks.json"
 
-    if "agent-memory" in data:
-        del data["agent-memory"]
-        hooks_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    for key in ("agi-memory", "agent-memory"):
+        if key in data:
+            del data[key]
+            hooks_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return True, f"Uninstalled Antigravity hooks from {hooks_path}"
 
 
@@ -993,7 +995,7 @@ OPENCODE_PLUGIN_TEMPLATE = """\
 import { execFileSync } from "node:child_process";
 
 export const AgentMemoryPlugin = {
-  id: "agent-memory",
+  id: "agi-memory",
   async setup(ctx) {
     const PY = "@@PY@@";
     const HOOKS_PY = "@@HOOKS_PY@@";
@@ -1072,11 +1074,17 @@ export default AgentMemoryPlugin;
 
 
 def opencode_plugin_path(scope: str = "user") -> Path:
-    """Target path of the agent-memory OpenCode plugin file."""
+    """Target path of the agi-memory OpenCode plugin file."""
     if scope == "user":
         base = Path(os.environ.get("XDG_CONFIG_HOME", "").strip() or Path.home() / ".config")
-        return base.expanduser() / "opencode" / "plugins" / "agent-memory.js"
-    return Path.cwd() / ".opencode" / "plugins" / "agent-memory.js"
+        return base.expanduser() / "opencode" / "plugins" / "agi-memory.js"
+    return Path.cwd() / ".opencode" / "plugins" / "agi-memory.js"
+
+
+def legacy_opencode_plugin_path(scope: str = "user") -> Path:
+    """Pre-0.9.1 plugin filename, removed on install."""
+    p = opencode_plugin_path(scope)
+    return p.parent / "agent-memory.js"
 
 
 def install_opencode_plugin(scope: str = "user", py_path: str = None) -> Tuple[bool, str]:
@@ -1088,23 +1096,34 @@ def install_opencode_plugin(scope: str = "user", py_path: str = None) -> Tuple[b
         target.parent.mkdir(parents=True, exist_ok=True)
         content = OPENCODE_PLUGIN_TEMPLATE.replace("@@PY@@", py).replace("@@HOOKS_PY@@", hooks_py)
         target.write_text(content, encoding="utf-8")
+        legacy = legacy_opencode_plugin_path(scope)
+        if legacy != target and legacy.exists():
+            try:
+                if "AgentMemoryPlugin" in legacy.read_text(encoding="utf-8"):
+                    legacy.unlink()
+            except OSError:
+                pass
         return True, f"Installed OpenCode plugin in {target}"
     except OSError as e:
         return False, f"Failed to write OpenCode plugin: {e}"
 
 
 def uninstall_opencode_plugin(scope: str = "user") -> Tuple[bool, str]:
-    """Remove the agent-memory OpenCode plugin file (only if ours)."""
-    target = opencode_plugin_path(scope)
-    if not target.exists():
+    """Remove the agi-memory OpenCode plugin file (only if ours)."""
+    removed = []
+    for target in (opencode_plugin_path(scope), legacy_opencode_plugin_path(scope)):
+        if not target.exists():
+            continue
+        try:
+            if "AgentMemoryPlugin" not in target.read_text(encoding="utf-8"):
+                return False, f"Refusing to remove foreign plugin file {target}"
+            target.unlink()
+            removed.append(str(target))
+        except OSError as e:
+            return False, f"Failed to remove OpenCode plugin: {e}"
+    if not removed:
         return True, "No OpenCode plugin file found"
-    try:
-        if "AgentMemoryPlugin" not in target.read_text(encoding="utf-8"):
-            return False, f"Refusing to remove foreign plugin file {target}"
-        target.unlink()
-        return True, f"Uninstalled OpenCode plugin from {target}"
-    except OSError as e:
-        return False, f"Failed to remove OpenCode plugin: {e}"
+    return True, f"Uninstalled OpenCode plugin from {', '.join(removed)}"
 
 
 def install_git_hooks(target_dir: Path | None = None, py_path: str = None) -> Tuple[bool, str]:

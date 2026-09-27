@@ -164,7 +164,7 @@ with tempfile.TemporaryDirectory() as tmp_dir:
 assert len(integrate.INTEGRATIONS) == 13
 for tool in integrate.INTEGRATIONS:
     cfg_snip = tool.generate_config("python3", "mcp_server.py")
-    assert "agent-memory" in cfg_snip
+    assert "agi-memory" in cfg_snip
 
 # tool locations are resolved (env override > existing convention > default),
 # never hardcoded to one machine's layout
@@ -1129,13 +1129,14 @@ with tempfile.TemporaryDirectory() as hook_tmp:
         ok, msg = hooks.install_agy_hooks(scope="project", py_path="/usr/bin/python3")
         assert ok
         saved_agy = json.loads(agy_hooks.read_text())
-        assert "agent-memory" in saved_agy
-        assert "PreInvocation" in saved_agy["agent-memory"]
-        assert "Stop" in saved_agy["agent-memory"]
+        assert "agi-memory" in saved_agy
+        assert "PreInvocation" in saved_agy["agi-memory"]
+        assert "Stop" in saved_agy["agi-memory"]
 
         ok, msg = hooks.uninstall_agy_hooks(scope="project")
         assert ok
         uninstalled_agy = json.loads(agy_hooks.read_text())
+        assert "agi-memory" not in uninstalled_agy
         assert "agent-memory" not in uninstalled_agy
 
         # 10c. Test Git hooks installation & uninstallation
