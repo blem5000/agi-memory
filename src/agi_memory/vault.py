@@ -483,7 +483,11 @@ def import_from_vault(
                         d.get("prompt_number", 0),
                         d.get("discovery_tokens", 0),
                         d.get("created_at", ""),
-                        d.get("created_at_epoch", int(time.time())),
+                        # Milliseconds, like every other writer of this column.
+                        # The default was seconds, so a vault record missing the
+                        # field landed 1000x in the past -- which a recency
+                        # ranking then reads as older than anything ever stored.
+                        d.get("created_at_epoch") or int(time.time() * 1000),
                         ch,
                         d.get("generated_by_model", "sync"),
                         d.get("relevance_count", 0),

@@ -79,7 +79,30 @@ Developer infrastructure must not slow down typing, lag editor interactions, or 
 | **Active MCP Server RAM** | **~34.7 MB RSS** | 450 MB – 1.2 GB+ (PyTorch, Chroma) | **13x – 35x lighter** |
 | **Install Footprint** | **< 1 MB** (0 external dependencies) | ~850 MB (Mem0 / heavy pip wheels) | **850x smaller** |
 
-### 3. Dead-End Avoidance & Actionability
+### 3. How Recall Behaves on a Real 15k Store
+
+Retrieval quality on a merged 15,123-observation vault spanning 41 projects and
+eight months, measured rather than specified. Ranking is, in order: superseded
+decisions last, an exact title match, BM25 relevance, a bounded recency nudge,
+then the trust tier.
+
+| Behaviour | Why it is there |
+|---|---|
+| **Exact title match wins outright** | Asking for a title that has four versions on disk used to return an unrelated memory that merely shared the words. Now the literal title sorts first. |
+| **Recency breaks near-ties, never filters** | A fact that changed over months has both answers stored. A decaying boost (≈1.5 at one day old, ≈0.75 at 30 days, ~0 beyond a year) reorders memories whose BM25 scores are within ~1-3. Nothing is excluded for being old. |
+| **The whole query also matches as a phrase** | A bare OR of every token ranks a body that mentions all the words above a record whose title *is* the query. |
+| **The writer is shown** | Every recall line ends `(via <host> <pid> <harness>)`, so a reader can tell its own conclusion from a sibling process's inference. Costs ~20 tokens on the injected path. |
+| **Superseded decisions rank last** | A replaced decision never outranks the one that replaced it, and it names what superseded it. |
+
+**Still not solved, and named rather than hidden:** nothing detects that a
+memory has become *wrong* — a memory that was correct and is no longer keeps
+winning searches until a human or agent supersedes it. Recency makes the newest
+answer easier to find; it does not know which one is true. This is the same gap
+the wider field calls memory staleness, and the honest position is that the
+mechanism is a supersession workflow plus read receipts, not automatic
+invalidation.
+
+### 4. Dead-End Avoidance & Actionability
 
 Standard memory solutions suffer from "retrieval without actionability" — returning obsolete rules or recapping dropped work as active tasks. `agi-memory` explicitly tracks temporality, supersession, and session outcomes (`tests/eval_usage.py`):
 

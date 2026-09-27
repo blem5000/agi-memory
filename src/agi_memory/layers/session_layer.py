@@ -10,6 +10,7 @@ import re
 import functools
 import sqlite3
 import os
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -90,6 +91,17 @@ def normalize_origin(value) -> str:
 # FTS5 index schema version. Bump when the tokenizer changes so existing
 # databases rebuild instead of silently serving results from the old index.
 FTS_SCHEMA_VERSION = 2
+
+# How hard a fresher memory is promoted over an older one of equal relevance,
+# and the decay constant. BM25 `rank` measures about -11 (broad) to -20
+# (specific) on this store, and competing hits on one topic sit within ~1-3 of
+# each other, so a boost of 1.5 reorders near-ties without letting a merely
+# recent memory displace a clearly better match. Recency is a tiebreaker, never
+# a filter: nothing is excluded for being old, and the decay is a rational
+# function rather than exp() because SQLite only has exp() when built with
+# math functions.
+RECENCY_BOOST = 1.5
+RECENCY_TAU_MS = 30 * 86400 * 1000  # ~30 days to half the boost
 
 # Porter stemming makes "authenticate" find "authentication" -- measured at ~0%
 # recall without it. Older SQLite builds may not have it, so we degrade to the
@@ -456,7 +468,7 @@ class SessionLayer(MemoryLayer):
         con = open_db(self.db_path, readonly=True)
         ph = ",".join("?" for _ in ids)
         sql = ("SELECT id, project, title, facts, narrative, type, rationale, superseded_by, "
-               "origin FROM observations "
+               "origin, agent FROM observations "
                f"WHERE id IN ({ph})")
         args: list = [int(i) for i in ids]
         if self.project in ("agi-memory", "agent-memory"):
@@ -475,6 +487,7 @@ class SessionLayer(MemoryLayer):
             why = row[6] if len(row) > 6 else None
             sup_by = row[7] if len(row) > 7 else None
             origin = row[8] if len(row) > 8 else None
+            agent = row[9] if len(row) > 9 else None
             # A dead decision must say what replaced it, not just that it is dead.
             tag = ""
             if typ == "superseded":
@@ -497,7 +510,17 @@ class SessionLayer(MemoryLayer):
             # same once retrieved, so the two that change how the memory should
             # be treated say so.
             tag += _ORIGIN_TAG.get(origin or "", "")
-            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {body}{why_str}".replace("  ", " "),
+            # Who wrote it. Without this an agent cannot tell its own conclusion
+            # from a sibling process's inference on the same machine -- the
+            # provenance the store records but the reader never saw. `host:pid`
+            # is shortened to `host pid` because a reader needs to tell two
+            # writers apart, not to read the whole string.
+            by = (agent or "").strip()
+            if by and by.count(":") == 2:
+                host, pid, harness = by.split(":")
+                by = f"{host} {pid} {harness}"
+            who = f" (via {by[:48]})" if by else ""
+            by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {body}{why_str}{who}".replace("  ", " "),
                                 source=self.name, ref=str(i))
         return [by_id[str(i)] for i in ids if str(i) in by_id]
 
@@ -517,15 +540,37 @@ class SessionLayer(MemoryLayer):
             sql = """SELECT observations.id FROM observations_fts
                      JOIN observations ON observations.id = observations_fts.rowid
                      WHERE observations_fts MATCH ?"""
-            args: list = [" OR ".join(tokens)]
+            # A bare OR of every token ranks a body that happens to mention all
+            # the words above a record whose title *is* the query. Asking for the
+            # exact phrase is the stronger signal, so it goes into the MATCH too
+            # and scores far higher. Sanitised to alphanumerics and spaces: a
+            # quote, colon or hyphen in user input is FTS5 syntax, and one
+            # unescaped character makes the whole query fail.
+            phrase = " ".join(t for t in re.findall(r"[a-z0-9]+", query.lower()))
+            match = " OR ".join(tokens)
+            if len(phrase.split()) >= 2:
+                match = f'"{phrase}" OR ({match})'
+            args: list = [match]
             if self.project in ("agi-memory", "agent-memory"):
                 sql += " AND (project = 'agi-memory' OR project = 'agent-memory')"
             elif self.project:
                 sql += " AND project = ?"
                 args.append(self.project)
-            sql += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
-                "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
-            args.append(limit)
+            # Order: dead decisions last, then an exact title match, then
+            # relevance, then a bounded recency nudge, then origin.
+            #
+            # The nudge exists because a fact that changed over eight months has
+            # both answers on disk, and BM25 alone is happy to return the old
+            # one. It is additive to `rank` (FTS5 bm25, negative, ~-11 to -20
+            # measured) and bounded by RECENCY_BOOST, so it reorders near-ties
+            # and never beats a genuinely better match. The rational decay needs
+            # no exp(), which SQLite only has when built with math functions.
+            sql += (" ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, "
+                    "(CASE WHEN lower(observations.title) = ? THEN 0 ELSE 1 END) ASC, "
+                    f"(rank - {RECENCY_BOOST} / (1.0 + ((? - observations.created_at_epoch) / {RECENCY_TAU_MS}.0))) ASC, "
+                    "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC "
+                    "LIMIT ?")
+            args += [phrase, int(time.time() * 1000), limit]
             rows = con.execute(sql, args).fetchall()
 
             # Fallback: prefix wildcard matching if standard query returned 0 rows
