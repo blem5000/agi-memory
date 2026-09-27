@@ -136,6 +136,26 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(1, res["listed"])
 
 
+class OriginTests(unittest.TestCase):
+    def test_imported_history_keeps_its_origin(self):
+        # The MCP schema advertises these; normalize_origin() silently rewrites
+        # anything it does not know, so a gap between the two lists turns an
+        # unverified import into "the agent decided this".
+        from agi_memory.layers.session_layer import ORIGINS, normalize_origin
+        from agi_memory.mcp_server import TOOLS
+        schema = next(t for t in TOOLS if t["name"] == "memory_record")
+        advertised = schema["inputSchema"]["properties"]["origin"]["enum"]
+        self.assertTrue(set(advertised) <= set(ORIGINS),
+                        f"advertised but rejected: {set(advertised) - set(ORIGINS)}")
+        for origin in advertised:
+            self.assertEqual(origin, normalize_origin(origin), origin)
+
+    def test_history_import_origin_is_not_downgraded(self):
+        from agi_memory.layers.session_layer import normalize_origin
+        self.assertEqual("history-import", normalize_origin("history-import"))
+        self.assertEqual("agent-inferred", normalize_origin("something-made-up"))
+
+
 class BootstrapTests(unittest.TestCase):
     def test_bootstrap_imports_native_history(self):
         from agi_memory import bootstrap, history_import

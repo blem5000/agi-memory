@@ -68,7 +68,7 @@ STOPWORDS = frozenset(
 # ranked identically, and only the first is something later sessions should
 # treat as settled. Recorded at write time, shown in recall, and used to break
 # ties in ranking; it deliberately never outranks relevance.
-ORIGINS = ("user-confirmed", "agent-inferred", "bootstrapped", "deja-import")
+ORIGINS = ("user-confirmed", "agent-inferred", "bootstrapped", "deja-import", "history-import")
 DEFAULT_ORIGIN = "agent-inferred"
 # agent-inferred is the common case and needs no label; the other two change
 # how the reader should treat the memory, so they are marked.
@@ -76,6 +76,7 @@ _ORIGIN_TAG = {
     "user-confirmed": "[confirmed by the user] ",
     "bootstrapped": "[bootstrapped from git history, unverified] ",
     "deja-import": "[imported from deja session history, unverified] ",
+    "history-import": "[imported from local session transcript, unverified] ",
 }
 
 
