@@ -901,8 +901,14 @@ with tempfile.TemporaryDirectory() as core_tmp:
             con.close()
 
             promoted = promote.auto_promote(limit=10, project="p-core")
-            assert len(promoted) == 1
-            assert "Use FTS5" in promoted[0]
+            # Both durable observations in this fixture qualify: the one
+            # inserted here, and the DB Caching one recorded earlier in this
+            # test. Only the second was previously invisible, because
+            # collect() compared DURABLE_CONCEPTS against a JSON-encoded
+            # concepts column and matched nothing at all.
+            assert len(promoted) == 2, promoted
+            assert any("Use FTS5" in p for p in promoted), promoted
+            assert any("DB Caching" in p for p in promoted), promoted
 
             # Idempotent second run
             promoted_again = promote.auto_promote(limit=10, project="p-core")

@@ -50,6 +50,13 @@ agi-memory promote --auto --limit 25
 - **Cross-Session Continuity**: Captures session lifecycles (start, end, duration, agent type), touched file sets, prompt events, and git commit deltas.
 - **Automated Briefing Injection**: When an assistant launches, the `session-start` lifecycle hook generates an executive briefing of the most recent session's activity (<0.25ms), preventing cold-start rediscovery loops. Only Claude Code, Antigravity and OpenCode install lifecycle hooks.
 - **Sessions for every assistant**: The MCP server registers an episodic session on the first memory tool call of a process, reusing an active one a hook already started. So `memory_timeline` and `memory_session_outcome` work in all thirteen supported assistants, not only the three with hooks.
+- **Whose session is this?**: Every session records the agent that wrote it, and reuse is keyed on that. When two agents work one repo, the second one gets its own session instead of interleaving into the first one's row — previously the key was the project alone, so their events mixed and `memory_wip` reported a peer's work as your own. Identity is **derived, not asserted**: `AGI_AGENT_ID` if the harness sets one, otherwise `host:pid:harness`. Neither MCP nor A2A carries an actor field, so a derived id names a *process*, not a claimant, and `memory_wip` says which it has. A session whose writer is gone is reused rather than duplicated, so sequential CLI calls still produce one row.
+```bash
+# Tag the harness you launch, if you want a stable identity across its processes
+AGI_AGENT_ID=reviewer claude
+```
+- **Provenance survives promotion**: When a durable observation is promoted into L2 — the copy every agent retrieves indefinitely — the text carries `[user-confirmed by host:1234]` or `[agent-inferred by host:1234]`, so a promoted fact cannot lose who asserted it. `origin` alone described trustworthiness, never authorship.
+- **A model cannot mint the top trust tier**: `origin="user-confirmed"` outranks everything in recall, and over MCP the argument is chosen by the model, so it arrives as a claim with no witness. It is downgraded to `agent-inferred` with an explanation. Set `AGI_TRUST_WRITE=1` on a server you started yourself to overrule that.
 - **Session Outcomes (`memory_session_outcome` / `agi-memory outcome`)**: Record how a session
   ended - `completed`, `abandoned`, `blocked` or `superseded`. Unmarked sessions stay
   `unknown` rather than being reported as finished, and any outcome other than

@@ -6,7 +6,102 @@ Zero external dependencies (stdlib only).
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
+
+# How an agent's identity was established, and therefore how much it is worth.
+#
+# MCP and A2A both carry no actor field, and no client convention exists to hang
+# one on across the 13 assistants we support. So identity here is *derived*, and
+# the kind travels with it so nothing downstream can mistake a process for a
+# person:
+#
+#   "declared" -- AGI_AGENT_ID was set by whoever launched the harness. Trusted
+#                 as a label, not as proof: an agent can set its own env.
+#   "process"  -- host:pid:harness, i.e. which OS process wrote this. Two
+#                 sub-agents of one parent share all of it, so it separates
+#                 concurrent *processes* and nothing finer. That is still the
+#                 right granularity for stopping two agents from collapsing into
+#                 one session, which is what it is used for.
+#
+# The distinction matters because the alternative -- stamping an id on a claim
+# and calling it provenance -- makes the field a fabrication of exactly the
+# thing it exists to make true.
+DECLARED = "declared"
+PROCESS = "process"
+UNKNOWN = "unknown"
+
+
+def resolve_agent_id(harness: str = "") -> tuple[str, str]:
+    """(agent_id, kind) for this process. Never raises.
+
+    agent_id is what the session-reuse key is built on, so it must be stable
+    within a process and distinct between concurrent ones.
+    """
+    declared = (os.environ.get("AGI_AGENT_ID")
+                or os.environ.get("AGENT_MEMORY_AGENT_ID") or "").strip()
+    if declared:
+        return declared[:120], DECLARED
+    try:
+        host = socket.gethostname() or "localhost"
+    except Exception:
+        host = "localhost"
+    tag = harness.strip() or os.environ.get("AGI_HARNESS", "").strip() or "agent"
+    return f"{host}:{os.getpid()}:{tag}"[:200], PROCESS
+
+
+def agent_alive(agent_id: str) -> bool:
+    """Is the process that wrote this session still running?
+
+    This is the signal the old 12-hour window was guessing at. That window
+    answered "is anyone still working on this project?" by asking "did
+    anything happen recently?", which is why two concurrent agents shared a
+    session and why a peer's work was reported as yours. Asking the OS whether
+    the owning pid still exists answers the question directly.
+
+    A declared id names an agent we cannot probe, so it counts as alive: only
+    that agent may reuse its own session. Pid reuse can make a dead writer look
+    alive, which costs one extra session row, never a merged one.
+    """
+    parts = (agent_id or "").split(":")
+    if len(parts) < 2 or not parts[1].isdigit():
+        return bool(agent_id)
+    try:
+        os.kill(int(parts[1]), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True   # running, just not ours to signal
+    except (OSError, ValueError):
+        return True
+    return True
+
+
+def attest_write_origin(origin: str | None) -> tuple[str, str]:
+    """Downgrade a trust claim an MCP caller cannot back. Returns (origin, why).
+
+    `origin` is the strongest field in the store: 'user-confirmed' outranks
+    everything in recall ranking. Over MCP the argument is chosen by the model,
+    so it is a claim with no witness -- thirteen assistants share one store, and
+    any of them could otherwise mint the top trust tier on its own authority.
+    That is memory poisoning at the write boundary, which is where it has to be
+    stopped: contamination reduced later is contamination that already spread.
+
+    AGI_TRUST_WRITE=1 re-enables the claim, for a human who wants a server they
+    started themselves to record a confirmed fact on their behalf. That is the
+    only way to overrule this, and it is deliberately a human's decision.
+    """
+    want = (origin or "").strip().lower()
+    if want != "user-confirmed":
+        return want, ""
+    if os.environ.get("AGI_TRUST_WRITE", "").strip() in ("1", "true", "yes"):
+        return want, ""
+    return "agent-inferred", (
+        "downgraded to agent-inferred: 'user-confirmed' is a claim about a human, "
+        "and a model-chosen argument cannot attest one. Set AGI_TRUST_WRITE=1 on a "
+        "server you started yourself if you mean it."
+    )
+
 
 def _resolve_base_dir() -> Path:
     env = os.environ.get("AGI_MEMORY_DIR") or os.environ.get("AGENT_MEMORY_DIR")

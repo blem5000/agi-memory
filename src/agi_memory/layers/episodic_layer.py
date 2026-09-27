@@ -201,6 +201,15 @@ class EpisodicLayer(MemoryLayer):
         # get 'unknown', which is the honest reading -- nothing recorded how they
         # ended, and defaulting them to 'completed' is the bug this column fixes.
         cols = {r[1] for r in cur.execute("PRAGMA table_info(episodic_sessions)")}
+        # Which process wrote this row. Two agents in one project used to share a
+        # single session because the reuse key was (project, recent) alone, so
+        # "what was the last session doing" reported a peer's work as yours. The
+        # column is what that key is built on now; '' is every pre-identity row,
+        # which stays readable and groups as unknown rather than being rewritten.
+        if "agent" not in cols:
+            cur.execute("ALTER TABLE episodic_sessions ADD COLUMN agent TEXT DEFAULT ''")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_episodic_sessions_agent "
+                    "ON episodic_sessions(project, agent, started_at)")
         if "outcome" not in cols:
             cur.execute("ALTER TABLE episodic_sessions ADD COLUMN outcome TEXT DEFAULT 'unknown'")
         cur.execute("""
@@ -234,7 +243,8 @@ class EpisodicLayer(MemoryLayer):
         goal: str = "",
         branch: Optional[str] = None,
         head: Optional[str] = None,
-        cwd: Path | str | None = None
+        cwd: Path | str | None = None,
+        agent: str = ""
     ) -> Dict[str, Any]:
         """Start or register an active episodic session."""
         proj = project or self.project or "global"
@@ -249,18 +259,19 @@ class EpisodicLayer(MemoryLayer):
         cur = con.cursor()
         cur.execute("""
             INSERT INTO episodic_sessions (
-                session_id, project, goal, git_branch, git_head_before, git_head_after, status
-            ) VALUES (?, ?, ?, ?, ?, ?, 'active')
+                session_id, project, goal, git_branch, git_head_before, git_head_after, status, agent
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 status = 'active',
                 ended_at = NULL,
                 goal = CASE WHEN excluded.goal != '' THEN excluded.goal ELSE goal END,
                 git_branch = coalesce(excluded.git_branch, git_branch),
-                git_head_after = coalesce(excluded.git_head_after, git_head_after)
-        """, (sid, proj, goal, b, h, h))
+                git_head_after = coalesce(excluded.git_head_after, git_head_after),
+                agent = CASE WHEN excluded.agent != '' THEN excluded.agent ELSE agent END
+        """, (sid, proj, goal, b, h, h, agent or ""))
         con.commit()
 
-        cur.execute("SELECT id, session_id, project, goal, started_at, git_branch, git_head_before, status FROM episodic_sessions WHERE session_id = ?", (sid,))
+        cur.execute("SELECT id, session_id, project, goal, started_at, git_branch, git_head_before, status, agent FROM episodic_sessions WHERE session_id = ?", (sid,))
         row = cur.fetchone()
         con.close()
 
@@ -273,6 +284,7 @@ class EpisodicLayer(MemoryLayer):
             "git_branch": row[5],
             "git_head": row[6],
             "status": row[7],
+            "agent": row[8] or "",
         }
 
     def set_goal_if_empty(self, goal: str, project: Optional[str] = None,
@@ -707,29 +719,35 @@ class EpisodicLayer(MemoryLayer):
         out.sort(key=lambda r: (-r["sessions"], -r["hits"]))
         return out
 
-    def get_timeline(self, project: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
-        """Retrieve chronological timeline of past sessions."""
+    def get_timeline(self, project: Optional[str] = None, limit: int = 5,
+                     agent: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieve chronological timeline of past sessions.
+
+        `agent` narrows to one writer. It is a filter, never a reordering: an
+        agent asking about the project's history still sees every session, and
+        only the reuse decision in the MCP server treats it as a key.
+        """
         proj = project or self.project
         con = self._get_con(mode="ro")
         cur = con.cursor()
 
+        cols = ("id, session_id, project, goal, started_at, ended_at, duration_seconds, "
+                "git_branch, git_head_before, git_head_after, summary, touched_files, "
+                "commits, status, outcome, agent")
+        where, args = [], []
         if proj:
-            cur.execute("""
-                SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
-                FROM episodic_sessions
-                WHERE project = ?
-                ORDER BY started_at DESC, id DESC
-                LIMIT ?
-            """, (proj, limit))
-        else:
-            cur.execute("""
-                SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                       git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
-                FROM episodic_sessions
-                ORDER BY started_at DESC, id DESC
-                LIMIT ?
-            """, (limit,))
+            where.append("project = ?")
+            args.append(proj)
+        if agent is not None:
+            where.append("agent = ?")
+            args.append(agent)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        args.append(limit)
+        cur.execute(f"""
+            SELECT {cols} FROM episodic_sessions{clause}
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+        """, tuple(args))
 
         rows = cur.fetchall()
         con.close()
@@ -752,12 +770,14 @@ class EpisodicLayer(MemoryLayer):
                 "commits": json.loads(r[12] or "[]"),
                 "status": r[13],
                 "outcome": r[14] or "unknown",
+                "agent": r[15] or "",
             })
         return results
 
-    def get_last_session(self, project: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Retrieve the most recent session for this project."""
-        timeline = self.get_timeline(project=project, limit=1)
+    def get_last_session(self, project: Optional[str] = None,
+                         agent: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Most recent session for this project, optionally for one writer."""
+        timeline = self.get_timeline(project=project, limit=1, agent=agent)
         return timeline[0] if timeline else None
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -766,7 +786,7 @@ class EpisodicLayer(MemoryLayer):
         cur = con.cursor()
         cur.execute("""
             SELECT id, session_id, project, goal, started_at, ended_at, duration_seconds,
-                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome
+                   git_branch, git_head_before, git_head_after, summary, touched_files, commits, status, outcome, agent
             FROM episodic_sessions WHERE session_id = ?
         """, (session_id,))
         row = cur.fetchone()
@@ -809,6 +829,7 @@ class EpisodicLayer(MemoryLayer):
             "commits": json.loads(row[12] or "[]"),
             "status": row[13],
             "outcome": row[14] or "unknown",
+            "agent": row[15] or "",
             "events": events
         }
 
@@ -937,7 +958,11 @@ class EpisodicLayer(MemoryLayer):
         # Outcome leads. A reader who stops after the first four words must not
         # come away thinking an abandoned session is the task to continue.
         outcome = (session.get("outcome") or "unknown").lower()
-        line = f"**Last Session (`{sid}`, {outcome})**: {goal} -> {summary}{tf_str}{cm_str}"
+        # Name the writer when we know it. "Last session" implied yours; with two
+        # agents in one repo it frequently was not.
+        who = (session.get("agent") or "").strip()
+        by = f", written by `{who}`" if who else ", writer unknown"
+        line = f"**Last Session (`{sid}`, {outcome}{by})**: {goal} -> {summary}{tf_str}{cm_str}"
         if outcome in NOT_RESUMABLE:
             line += f"\n- {_RESUME_WARNING[outcome]}"
         return line

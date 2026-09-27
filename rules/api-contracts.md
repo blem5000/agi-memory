@@ -34,11 +34,17 @@ Persists verified technical learnings, decisions, or rules into session memory a
     `Why: ...` in recall, and carried across machines by the vault. Without it a later session
     inherits a conclusion it cannot re-examine.
   - `origin` (string, optional, default: `"agent-inferred"`): Where the memory came from -
-    `"user-confirmed"`, `"agent-inferred"` or `"bootstrapped"`. Relevance ranking cannot tell a
+    `"user-confirmed"`, `"agent-inferred"`, `"bootstrapped"`, `"deja-import"` or
+    `"history-import"`. Relevance ranking cannot tell a
     decision the user approved from a guess an agent wrote while exploring; this records the
     difference at write time, labels the two that change how a reader should treat the memory,
     and breaks ties in ranking without ever outranking relevance. An unrecognised value falls
     back to `agent-inferred` rather than becoming a trust claim.
+    **Over MCP, `"user-confirmed"` is downgraded to `"agent-inferred"`** unless the server runs
+    with `AGI_TRUST_WRITE=1`: the argument is chosen by the model, so it cannot attest that a
+    human agreed. The response says so. `origin` records how far a claim can be trusted;
+    the writer is recorded separately, because a trusted claim from an unidentified agent is
+    still unattributed.
   - `relations` (array of objects, optional): Knowledge graph triples to store directly into L2 durable memory:
     - `source` (string, required): Source concept/entity.
     - `relation` (string, required): Relationship type (`USES`, `REPLACES`, `IMPLEMENTS`, `FORBIDS`).
@@ -114,6 +120,9 @@ Point-of-action resume: what the last session in this project was doing, its rec
 - **Note**: Backed by `post-tool` hook events, so the command list fills in only for
   assistants that deliver them (Claude Code, OpenCode). The goal, outcome and touched
   files come from the session row itself and are always present.
+- **Writer, not just work**: the recap names the agent that wrote the session, because
+  two agents in one repo no longer share a row. Your own session is preferred; if only a
+  peer's exists, it is returned with an explicit warning that it is not yours.
 
 ### 13. `memory_friction`
 Recurring failure signature report: command errors that keep repeating across sessions, so a known-bad command is not re-run blind.

@@ -229,7 +229,8 @@ class SessionLayer(MemoryLayer):
                 if not cols:  # table not created yet; _init_db will build it
                     return
                 for col, decl in (("rationale", "TEXT"), ("superseded_by", "INTEGER"),
-                                  ("supersedes_refs", "TEXT"), ("origin", "TEXT")):
+                                  ("supersedes_refs", "TEXT"), ("origin", "TEXT"),
+                                  ("agent", "TEXT")):
                     if col not in cols:
                         con.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
                 con.commit()
@@ -291,7 +292,7 @@ class SessionLayer(MemoryLayer):
                 discovery_tokens INT, created_at TEXT, created_at_epoch INT, content_hash TEXT,
                 generated_by_model TEXT, relevance_count INT, sync_rev TEXT,
                 rationale TEXT, superseded_by INTEGER, supersedes_refs TEXT,
-                origin TEXT
+                origin TEXT, agent TEXT
             )
         """)
         # Added after the first release. `rationale` is why a decision was made,
@@ -676,7 +677,8 @@ class SessionLayer(MemoryLayer):
     def record(self, text: str, title: str | None = None,
                project: str | None = None, metadata: dict | None = None,
                category: str = "decision", supersedes: str | None = None,
-               rationale: str | None = None, origin: str | None = None) -> dict:
+               rationale: str | None = None, origin: str | None = None,
+               agent: str = "") -> dict:
         """Record an observation/decision into L1 memory via direct SQLite FTS5 insertion."""
         # Before anything is hashed, inserted or mirrored to the vault's git remote.
         text, title, rationale = redact(text), redact(title), redact(rationale)
@@ -760,14 +762,14 @@ class SessionLayer(MemoryLayer):
                 facts, narrative, concepts, files_read, files_modified,
                 prompt_number, discovery_tokens, created_at, created_at_epoch,
                 content_hash, generated_by_model, relevance_count, sync_rev, rationale,
-                origin
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                origin, agent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id, proj, cat, tit, "Recorded via agent-memory",
             json.dumps([text] + ([f"Rationale: {why}"] if why else [])), text,
             json.dumps([cat, "pattern"] + self._canonical_terms(tit, text)),
             "[]", "[]", 1, 0, now_iso, now_epoch, content_hash, "agent-memory", 0, "1", why,
-            src
+            src, agent or ""
         ))
         obs_id = cur.lastrowid
 
@@ -866,6 +868,7 @@ class SessionLayer(MemoryLayer):
             "content_hash": content_hash,
             "rationale": why,
             "origin": src,
+            "agent": agent or "",
             "supersedes_refs": json.dumps(supersedes_refs) if supersedes_refs else None,
             "generated_by_model": "agent-memory",
             "relevance_count": 0,
@@ -898,6 +901,8 @@ class SessionLayer(MemoryLayer):
             "title": tit,
             "project": proj,
             "category": cat,
+            "origin": src,
+            "agent": agent or "",
             "superseded_ids": superseded_ids,
             "conflicts": filtered_conflicts,
             "message": f"Memory saved directly to SQLite as observation #{obs_id}"
@@ -1042,7 +1047,7 @@ class SessionLayer(MemoryLayer):
                 SELECT id, memory_session_id, project, type, title, subtitle,
                        facts, narrative, concepts, files_read, files_modified,
                        created_at, created_at_epoch, content_hash, rationale, superseded_by,
-                       origin
+                       origin, agent
                 FROM observations WHERE id = ?
             """, (obs_id,)).fetchone()
             if not row:
@@ -1065,6 +1070,7 @@ class SessionLayer(MemoryLayer):
                 "rationale": row[14],
                 "superseded_by": row[15],
                 "origin": row[16],
+                "agent": row[17] or "",
             }
         finally:
             con.close()
@@ -1098,7 +1104,8 @@ class SessionLayer(MemoryLayer):
         con = open_db(self.db_path)
         cur = con.cursor()
         try:
-            sql = "SELECT id, project, type, title, subtitle, narrative, created_at FROM observations"
+            sql = ("SELECT id, project, type, title, subtitle, narrative, created_at, "
+                   "origin, agent FROM observations")
             conditions = []
             params: list[object] = []
             if not include_superseded:
@@ -1119,6 +1126,8 @@ class SessionLayer(MemoryLayer):
                 "subtitle": r[4],
                 "narrative": r[5],
                 "created_at": r[6],
+                "origin": r[7] or "",
+                "agent": r[8] or "",
             } for r in rows]
         except sqlite3.Error:
             # Schema not yet created (e.g. a peer layer made the file first):

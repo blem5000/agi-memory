@@ -23,6 +23,7 @@ try:
     from agi_memory.layers.episodic_layer import EpisodicLayer
     from agi_memory.layers.code_layer import CodeLayer
     from agi_memory.layers.graph_layer import GraphLayer
+    from agi_memory.config import agent_alive, attest_write_origin, resolve_agent_id
     from agi_memory.recall import recall
     from agi_memory import bootstrap, promote, sync, vault
     from agi_memory.vault import append_tombstone_to_vault
@@ -34,6 +35,7 @@ except ImportError:
     from layers.episodic_layer import EpisodicLayer
     from layers.code_layer import CodeLayer
     from layers.graph_layer import GraphLayer
+    from config import agent_alive, attest_write_origin, resolve_agent_id
     from recall import recall
     import bootstrap
     import promote
@@ -319,6 +321,18 @@ def _ensure_session(project):
     "No session found to mark". The first memory tool call of a process now
     reuses today's active session for the project (so a hook-started session is
     not duplicated) or starts one. Failures never break the tool call itself.
+
+    The reuse key is (project, agent), not project alone. Keyed on project, two
+    agents working the same repo shared one row: their events interleaved, and
+    memory_wip reported a peer's work as the caller's own. The agent id only has
+    to separate concurrent processes, which is what a derived host:pid does, so
+    this fixes the collapse without claiming an identity it cannot source.
+
+    Reuse is still the default, because a hook-less assistant's every CLI call
+    is a new process and a row each would bury the timeline in noise. What
+    changed is the test: reuse the project's active session when it is *yours*
+    or its writer is gone, and start your own when a live process still holds
+    it. A 12-hour window could not tell those apart.
     """
     try:
         proj = project
@@ -328,17 +342,32 @@ def _ensure_session(project):
             except ImportError:
                 from hooks import detect_project
             proj = detect_project()
-        if proj in _SESSION_REGISTERED:
+        agent = resolve_agent_id()[0]
+        if (proj, agent) in _SESSION_REGISTERED:
             return proj
         ep = EpisodicLayer(project=proj)
         try:
             ep.close_stale_sessions(project=proj)
         except Exception:
             pass
-        last = ep.get_last_session(project=proj)
-        if not (last and last.get("status") == "active" and _started_recently(last.get("started_at"))):
-            ep.start_session(project=proj)
-        _SESSION_REGISTERED.add(proj)
+        holder = ep.get_last_session(project=proj)
+        held_by = (holder.get("agent") or "") if holder else ""
+        active = bool(holder and holder.get("status") == "active"
+                      and _started_recently(holder.get("started_at")))
+        # A live process still holding this project's active session is the case
+        # the 12-hour window could not see. Reuse is right when the session is
+        # ours, or when its writer is gone -- which is every sequential CLI call
+        # from a hook-less assistant, and the reason reuse stays the default.
+        contended = active and bool(held_by) and held_by != agent and agent_alive(held_by)
+        if contended:
+            ep.start_session(project=proj, agent=agent)
+        elif active:
+            # Adopt the open session and stamp it, so one row accumulates this
+            # project's work instead of a new one per process.
+            ep.start_session(session_id=holder["session_id"], project=proj, agent=agent)
+        else:
+            ep.start_session(project=proj, agent=agent)
+        _SESSION_REGISTERED.add((proj, agent))
         return proj
     except Exception:
         return project
@@ -443,6 +472,10 @@ def call_tool(name, args):
         if supersedes and not str(args.get("rationale") or "").strip():
             return "error: 'rationale' is required with 'supersedes' -- say why the earlier decision no longer holds"
 
+        # 'user-confirmed' outranks everything in recall, and here the argument
+        # is chosen by the model, so it is a claim with no witness. The transport
+        # decides, not the payload: a model cannot attest that a human agreed.
+        origin, downgrade = attest_write_origin(args.get("origin"))
         res = l1.record(
             text=text,
             title=title,
@@ -450,8 +483,11 @@ def call_tool(name, args):
             category=category,
             supersedes=supersedes,
             rationale=args.get("rationale"),
-            origin=args.get("origin"),
+            origin=origin,
+            agent=resolve_agent_id()[0],
         )
+        if downgrade:
+            res["origin_downgraded"] = downgrade
         msg = res.get("message", f"Memory saved as observation #{res.get('id')}")
 
         # Ingest relations into L2 GraphLayer directly
@@ -476,6 +512,8 @@ def call_tool(name, args):
 
         if res.get("superseded_ids"):
             msg += f"\nMarked older observation(s) {', '.join(f'#{i}' for i in res['superseded_ids'])} as superseded."
+        if res.get("origin_downgraded"):
+            msg += f"\n[note] {res['origin_downgraded']}"
 
         if res.get("conflicts"):
             conflict_strs = [f"#{c['id']} '{c['title']}': {c['text'][:80]}" for c in res["conflicts"]]
@@ -556,10 +594,21 @@ def call_tool(name, args):
         return f"Session '{marked}' recorded as {args.get('outcome')}."
     if name == "memory_wip":
         ep = EpisodicLayer(project=project)
-        sess = ep.get_last_session(project=project)
+        agent = resolve_agent_id()[0]
+        # Your own last session first; a peer's only if you have none, and named
+        # as a peer's. Answering with the newest row regardless is what made
+        # this report another agent's work as the caller's.
+        sess = ep.get_last_session(project=project, agent=agent)
+        foreign = False
+        if not sess:
+            sess = ep.get_last_session(project=project)
+            foreign = bool(sess) and (sess.get("agent") or "") not in ("", agent)
         if not sess:
             return "(no sessions recorded yet)"
         out = EpisodicLayer.format_recap(sess)
+        if foreign:
+            out += ("\n- This session was written by another agent, not you. "
+                    "Confirm it is finished before acting on it.")
         try:
             full = ep.get_session(sess["session_id"]) or {}
             cmds = [e for e in full.get("events", []) if e.get("event_type") == "command"]

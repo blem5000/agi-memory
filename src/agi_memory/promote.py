@@ -39,11 +39,65 @@ def _save_state(seen: set) -> None:
     STATE.write_text(json.dumps(sorted(seen)))
 
 
+def _attribution(origin: str | None, agent: str | None) -> str:
+    """`[user-confirmed by host:1234] ` prefix, or '' for the default case.
+
+    Only the two cases that change how a reader should treat the fact are
+    labelled. An unattributed line would read as plain fact, so the interesting
+    cases have to be visible in the durable copy rather than only in the ledger.
+    """
+    o = (origin or "").strip()
+    who = (agent or "").strip()
+    if o == "user-confirmed":
+        return f"[{o}{' by ' + who if who else ''}] "
+    if o in ("bootstrapped", "deja-import", "history-import"):
+        return f"[{o}, unverified] "
+    if who:
+        return f"[{o or 'agent-inferred'} by {who}] "
+    return ""
+
+
+def _concepts(raw: str | None) -> set:
+    """Concept tags from the `concepts` column.
+
+    It holds a JSON array, so splitting it on commas yields '["decision"' and
+    ' "pattern"]' -- neither of which equals 'pattern', so the durable-concept
+    gate below never matched anything. collect() returned an empty list on every
+    real database and the L2 graph was never populated by promotion at all;
+    tests/eval_l2.py missed it by ingesting its own fixtures instead of calling
+    this. Falls back to a comma split so a pre-JSON value still reads.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return set()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return set()
+        if isinstance(parsed, list):
+            return {str(c).strip() for c in parsed}
+    return {t.strip() for t in text.split(",") if t.strip()}
+
+
 def collect(project: str | None = None, since_epoch: int = 0) -> list:
     """(text, source_ref) pairs. source_ref is "obs:<id>" for promoted
     observations and None for session learnings, which have no row."""
     if not DB.exists():
         return []
+    # The observations table gains columns by migration, and a migration only
+    # runs when a SessionLayer is built. collect() is a plain reader, so on a
+    # database written by an older version its query hits "no such column" --
+    # which the except below turns into "nothing to promote". That is how a
+    # populated L1 ended up promoting nothing at all, with no error anywhere.
+    try:
+        try:
+            from agi_memory.layers.session_layer import SessionLayer
+        except ImportError:
+            from layers.session_layer import SessionLayer
+        SessionLayer(db_path=DB)
+    except Exception:
+        pass
     con = open_db(DB, readonly=True)
     out: list[str] = []
     try:
@@ -59,18 +113,24 @@ def collect(project: str | None = None, since_epoch: int = 0) -> list:
     except sqlite3.OperationalError:
         pass
     try:
-        q = ("SELECT project, title, facts, concepts, id FROM observations "
+        q = ("SELECT project, title, facts, concepts, id, origin, agent FROM observations "
              "WHERE created_at_epoch > ? AND type IN ('decision','bugfix','feature')")
         args = [since_epoch]
         if project:
             q += " AND project = ?"
             args.append(project)
-        for proj, title, facts, concepts, obs_id in con.execute(q, args).fetchall():
-            tags = set((concepts or "").split(","))
+        for proj, title, facts, concepts, obs_id, origin, agent in con.execute(q, args).fetchall():
+            tags = _concepts(concepts)
             if tags & DURABLE_CONCEPTS and facts:
                 # obs:<id> is the provenance handle a hard delete uses to find
                 # what this observation promoted into the graph.
-                out.append((f"[{proj}] {title}: {facts}", f"obs:{obs_id}"))
+                #
+                # The tag travels with the text because this is the copy every
+                # agent retrieves forever. L1 keeps origin and agent in columns
+                # that promotion dropped on the floor, so a durable fact could
+                # not say whether a human confirmed it or one agent inferred it.
+                out.append((f"[{proj}] {title}: {_attribution(origin, agent)}{facts}",
+                            f"obs:{obs_id}"))
     except sqlite3.OperationalError:
         pass
     con.close()
