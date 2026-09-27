@@ -90,7 +90,7 @@ TOOLS = [
                                     "project": {"type": "string", "description": "Target project name"},
                                     "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory this replaces. Requires `rationale` (why the older one no longer holds). MUTATES it: its type flips to superseded, so a caller gating destructive operations should treat memory_record with this set as one."},
                                     "rationale": {"type": "string", "description": "The constraints and tradeoffs behind the decision. A later session cannot re-examine a conclusion it has no reasoning for, so record it whenever the why is not obvious from the text alone."},
-                                    "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped", "deja-import"], "default": "agent-inferred", "description": "user-confirmed ONLY if the user stated or approved it; agent-inferred for anything you concluded yourself, however confident. An inflated value is worse than none."},
+                                    "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped", "deja-import", "history-import"], "default": "agent-inferred", "description": "user-confirmed ONLY if the user stated or approved it; agent-inferred for anything you concluded yourself, however confident. An inflated value is worse than none."},
                                     "relations": {"type": "array",
                                                   "description": "Knowledge graph triples stored in L2",
                                                   "items": {"type": "object",
@@ -153,6 +153,18 @@ TOOLS = [
                                     "project": {"type": "string", "description": "Optional project name override"},
                                     "session_id": {"type": "string", "description": "Session to mark (default: most recent)"}},
                      "required": ["outcome"]}},
+    {"name": "memory_wip",
+     "description": "What the last session was doing: goal, outcome, files touched, last command. Read this before starting new work in a repo you have touched before.",
+     "inputSchema": {"type": "object",
+                     "properties": {"project": {"type": "string", "description": "Optional project name filter"}},
+                     "required": []}},
+    {"name": "memory_friction",
+     "description": "Failed command signatures that keep recurring across sessions, with session and failure counts. Call before running a command that has bitten you before.",
+     "inputSchema": {"type": "object",
+                     "properties": {"project": {"type": "string", "description": "Optional project name filter"},
+                                    "min_sessions": {"type": "integer", "default": 3, "description": "Only report signatures seen in at least this many sessions"},
+                                    "limit": {"type": "integer", "default": 10, "description": "Max signatures to return"}},
+                     "required": []}},
     {"name": "code_structure",
      "description": "Get structural outline of classes, functions, methods, and types in a file or directory (structural code graph).",
      "inputSchema": {"type": "object",
@@ -542,6 +554,33 @@ def call_tool(name, args):
         if not marked:
             return "No session found to mark."
         return f"Session '{marked}' recorded as {args.get('outcome')}."
+    if name == "memory_wip":
+        ep = EpisodicLayer(project=project)
+        sess = ep.get_last_session(project=project)
+        if not sess:
+            return "(no sessions recorded yet)"
+        out = EpisodicLayer.format_recap(sess)
+        try:
+            full = ep.get_session(sess["session_id"]) or {}
+            cmds = [e for e in full.get("events", []) if e.get("event_type") == "command"]
+            if cmds:
+                last = cmds[-1]
+                try:
+                    failed = json.loads(last.get("details") or "{}").get("exit", 0) != 0
+                except (ValueError, AttributeError):
+                    failed = False
+                out += f"\nLast command ({'failed' if failed else 'ok'}): {(last.get('summary') or '')[:200]}"
+        except Exception:
+            pass
+        return out
+    if name == "memory_friction":
+        min_sessions = int(args.get("min_sessions", 3) or 3)
+        rows = EpisodicLayer(project=project).failed_command_stats(
+            project=project, min_sessions=min_sessions)[:limit]
+        if not rows:
+            return "(no recurring errors recorded yet -- post-tool hooks log runs as they happen)"
+        return "\n".join(f"{r['signature']} -- {r['sessions']} sessions, {r['hits']} failures"
+                         for r in rows)
     if name == "code_structure":
         cl = CodeLayer(project=project)
         target_path = args.get("path", ".") or "."
@@ -919,29 +958,7 @@ def cmd_wip(argv: list[str]) -> None:
                                      description="What the last session was doing: task, outcome, files, last command")
     parser.add_argument("--project", "-p", default=None, help="Project filter")
     args = parser.parse_args(argv)
-    try:
-        from agi_memory.layers.episodic_layer import EpisodicLayer
-    except ImportError:
-        from layers.episodic_layer import EpisodicLayer
-    ep = EpisodicLayer(project=args.project)
-    sess = ep.get_last_session(project=args.project)
-    if not sess:
-        print("(no sessions recorded yet)")
-        return
-    print(EpisodicLayer.format_recap(sess))
-    try:
-        full = ep.get_session(sess["session_id"]) or {}
-        cmds = [e for e in full.get("events", []) if e.get("event_type") == "command"]
-        if cmds:
-            import json as _json
-            last = cmds[-1]
-            try:
-                failed = (_json.loads(last.get("details") or "{}")).get("exit", 0) != 0
-            except (ValueError, AttributeError):
-                failed = False
-            print(f"Last command ({'failed' if failed else 'ok'}): {(last.get('summary') or '')[:200]}")
-    except Exception:
-        pass
+    print(call_tool("memory_wip", {"project": args.project}))
 
 
 def cmd_friction(argv: list[str]) -> None:
@@ -952,17 +969,9 @@ def cmd_friction(argv: list[str]) -> None:
     parser.add_argument("--min-sessions", type=int, default=3)
     parser.add_argument("--limit", "-n", type=int, default=10)
     args = parser.parse_args(argv)
-    try:
-        from agi_memory.layers.episodic_layer import EpisodicLayer
-    except ImportError:
-        from layers.episodic_layer import EpisodicLayer
-    rows = EpisodicLayer(project=args.project).failed_command_stats(
-        project=args.project, min_sessions=args.min_sessions)[:args.limit]
-    if not rows:
-        print("(no recurring errors recorded yet -- post-tool hooks log runs as they happen)")
-        return
-    for r in rows:
-        print(f"{r['signature']} -- {r['sessions']} sessions, {r['hits']} failures")
+    print(call_tool("memory_friction", {"project": args.project,
+                                        "min_sessions": args.min_sessions,
+                                        "limit": args.limit}))
 
 
 def cmd_outcome(argv: list[str]) -> None:
@@ -1152,6 +1161,13 @@ def main(argv: list[str] | None = None) -> None:
                 import deja_import
             deja_import.main(argv[1:])
             return
+        elif cmd in ("history-import", "history_import"):
+            try:
+                from agi_memory import history_import
+            except ImportError:
+                import history_import
+            history_import.main(argv[1:])
+            return
         elif cmd == "log":
             cmd_log(argv[1:])
             return
@@ -1249,6 +1265,7 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory                           Start MCP stdio server")
             print("  agi-memory stats [--json]            Show local cognitive memory statistics")
             print("  agi-memory bootstrap [--repo .]      Bootstrap initial memories from Git & README")
+            print("  agi-memory history-import [--index]  Import prior claude/codex/opencode sessions")
             print("  agi-memory timeline [--limit 5]      Inspect past session timelines and recaps")
             print("  agi-memory outcome <completed|abandoned|blocked|superseded>")
             print("                                       Record how this session ended")

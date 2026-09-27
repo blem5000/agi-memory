@@ -16,6 +16,16 @@ agi-memory delete 101 --hard
 # Inspect episodic session timeline
 agi-memory timeline -n 10 --project my-app
 
+# Point of action: what the last session was doing, and which commands keep failing
+agi-memory wip --project my-app
+agi-memory friction --project my-app --min-sessions 2
+
+# Day-1 history: read the transcripts Claude Code, Codex and OpenCode already
+# wrote. No LLM, no extra dependency.
+agi-memory history-import --limit 20            # recent sessions -> L1 digests
+agi-memory history-import --index              # every session -> episodic history
+agi-memory history-import --harness codex --project my-app
+
 # Structural code graph queries
 agi-memory structure src/ --project my-app
 agi-memory callers SessionLayer --project my-app

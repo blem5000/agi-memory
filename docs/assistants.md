@@ -1,6 +1,19 @@
 # Supported Assistants Matrix
 
-Every integrated tool gains access to 16 native tools: `memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `memory_session_outcome`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, and `code_index`. Session tools (`memory_timeline`, `memory_session_outcome`) work in every assistant: the server registers a session on first use, so they do not depend on lifecycle hooks, which only Claude Code, Antigravity and OpenCode install:
+Every integrated tool gains access to 18 native tools: `memory_recall`, `memory_recall_deep`, `memory_record`, `memory_promote`, `memory_sync`, `memory_pin`, `memory_unpin`, `memory_blocks`, `memory_bootstrap`, `memory_timeline`, `memory_session_outcome`, `memory_wip`, `memory_friction`, `code_structure`, `code_callers`, `code_dependencies`, `code_impact`, and `code_index`. Session tools (`memory_timeline`, `memory_session_outcome`) work in every assistant: the server registers a session on first use, so they do not depend on lifecycle hooks, which only Claude Code, Antigravity and OpenCode install.
+
+Proactive recall is a different matter, because it needs an event the assistant actually emits. `agi-integrate doctor` prints this table from the installed configs, so it reports what is wired rather than what is claimed:
+
+| Assistant | Point-of-action (runs unasked) | Lifecycle events |
+|---|---|---|
+| Claude Code | `PreToolUse` + `PostToolUse` | `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, `Stop` |
+| OpenCode | `PostToolUse` (plugin hook) | `session-start`, `user-prompt-submit`, `pre-compact`, `session-end` |
+| Antigravity | not available in its hook model | `PreInvocation`, `Stop` |
+| All others | none — recall on demand via MCP | none |
+
+Without hooks, `memory_wip` and `memory_friction` still answer from the session row (goal, outcome, files touched), but the command and failure history they summarise only fills in for the assistants above.
+
+## Where each assistant's config lives
 
 | Assistant / Environment | Type | agi-memory MCP Config | Proactive Memory Discipline Rules |
 |---|---|---|---|

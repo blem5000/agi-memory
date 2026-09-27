@@ -1,10 +1,9 @@
 # agi-memory
 
-> **Active.** Day-1 history import from [deja-vu](https://github.com/vshulcz/deja-vu)
-> is built in: `agi-memory deja-import` distills your existing session transcripts
-> into curated L1 observations, so recall works from moment zero instead of an
-> empty vault. Record-forward curation (rationale, supersession, pins) stays here;
-> raw transcript search stays in deja.
+> **Active.** Day-1 history import is built in: `agi-memory history-import` reads
+> the session transcripts Claude Code, Codex and OpenCode already wrote to disk
+> into L1 observations, so recall works from moment zero instead of an empty
+> vault. Zero dependencies, no LLM — just the history you already have.
 
 [![CI](https://github.com/kdbhalala/agi-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/kdbhalala/agi-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/agi-memory.svg)](https://pypi.org/project/agi-memory/)
@@ -71,20 +70,26 @@ agi-integrate install all          # connect every assistant it finds on your ma
 agi-integrate status               # see what got connected
 ```
 
-## Day-1: import deja history
+## Day-1: import your session history
 
 New vault, years of sessions already on disk — start full, not empty:
 
 ```bash
-agi-memory deja-import --limit 50 --dry-run   # preview what would import
-agi-memory deja-import --limit 200 --since 90d
-agi-bootstrap --repo . --with-deja             # README + git commits + deja in one pass
+agi-memory history-import --limit 20            # recent sessions -> L1 digests
+agi-memory history-import --index                # every session -> episodic history
+agi-memory history-import --harness codex --dry-run
+agi-bootstrap --repo . --with-history             # README + git commits + history, one pass
 ```
 
-Each deja session becomes one L1 observation (`origin="deja-import"`,
-title `[deja:<short-id>] ...`, project mapped from deja). Idempotent:
-re-runs skip imported sessions and tiny transcripts (`--min-words 800`).
-Filter with `--project`, `--harness`, `--since`.
+Each session becomes one L1 observation (`origin="history-import"`, title
+`[claude:1a2b3c4d] ...`, project taken from the session's working directory).
+Idempotent: re-runs skip sessions already imported. Filter with `--project` and
+`--harness` (`claude`, `codex`, `opencode`, `all`).
+
+A digest is the session's own words — goal, the prompts that drove it, files
+touched — not a distillation, because nothing here calls an LLM. That is enough
+for `memory_recall` to answer "have we been here before"; `memory_timeline` and
+`memory_wip` read the same rows.
 
 Other install options, including a one-line script and running from source, are
 in [Installation](docs/installation.md).
@@ -95,7 +100,7 @@ in [Installation](docs/installation.md).
 |---|---|
 | [Installation](docs/installation.md) | Install options, upgrading, lifecycle hooks |
 | [CLI Usage](docs/cli.md) | Every `agi-memory` and `agi-integrate` command |
-| [Supported Assistants](docs/assistants.md) | Where each assistant's config lives, and the 16 MCP tools |
+| [Supported Assistants](docs/assistants.md) | Where each assistant's config lives, and the 18 MCP tools |
 | [How memory is organised](docs/pillars.md) | Notes, knowledge graph, session history, code index |
 | [Architecture](docs/architecture.md) | How the pieces fit together |
 | [Vault & Git Sync](docs/sync.md) | The memory files, syncing between machines, compaction |

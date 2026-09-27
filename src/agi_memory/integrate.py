@@ -1378,6 +1378,14 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         except Exception:
             tools.append({"tool": tool.name, "detected": False, "configured": False, "rules": False})
     report["tools"] = tools
+    try:
+        try:
+            from agi_memory import hooks as _hooks
+        except ImportError:
+            import hooks as _hooks  # type: ignore
+        report["hooks"] = _hooks.hook_parity(scope)
+    except Exception:
+        report["hooks"] = {}
     if as_json:
         print(json.dumps(report, indent=2))
         return
@@ -1391,6 +1399,12 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     for t in tools:
         print(f"  {t['tool']:<22} {'yes' if t['detected'] else '-':<10} "
               f"{'yes' if t['configured'] else 'no':<12} {'yes' if t['rules'] else 'no'}")
+    # Assistants without hooks still get sessions and recall over MCP, so this
+    # table is about what fires unasked, not about what works.
+    print(f"\n  {'Hooks':<22} {'Point-of-action':<26} Installed")
+    for name, cap in (report.get("hooks") or {}).items():
+        installed = ", ".join(cap.get("installed") or []) or "none"
+        print(f"  {name:<22} {(cap.get('point_of_action') or 'not available'):<26} {installed}")
     print()
 
 

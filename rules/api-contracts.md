@@ -106,14 +106,32 @@ Records how a session ended, so a later session does not read dropped or rejecte
 - **Note**: A session nobody marks stays `unknown`. Recap and timeline render the outcome
   first and warn against resuming anything not marked `completed`.
 
-### 12. `code_structure`
+### 12. `memory_wip`
+Point-of-action resume: what the last session in this project was doing, its recorded outcome, files touched, and the last command it ran.
+- **Parameters**:
+  - `project` (string, optional): Project filter.
+- **Returns**: Formatted recap of the most recent session, or `(no sessions recorded yet)`.
+- **Note**: Backed by `post-tool` hook events, so the command list fills in only for
+  assistants that deliver them (Claude Code, OpenCode). The goal, outcome and touched
+  files come from the session row itself and are always present.
+
+### 13. `memory_friction`
+Recurring failure signature report: command errors that keep repeating across sessions, so a known-bad command is not re-run blind.
+- **Parameters**:
+  - `project` (string, optional): Project filter.
+  - `min_sessions` (integer, default: 3): Only report signatures seen in at least this many sessions.
+  - `limit` (integer, default: 10): Maximum signatures to return.
+- **Returns**: One line per signature as `signature -- N sessions, M failures`.
+- **Note**: Same source as `memory_wip`; empty until post-tool hooks have recorded runs.
+
+### 14. `code_structure`
 Structural code graph outline: lists classes, functions, methods, imports, and exports for a file or directory.
 - **Parameters**:
   - `path` (string, required): File or directory path to inspect.
   - `project` (string, optional): Project name.
 - **Returns**: Hierarchical symbol structure and line ranges.
 
-### 13. `code_callers`
+### 15. `code_callers`
 Inbound call graph traversal: finds callers and inbound references to a function, method, or class.
 - **Parameters**:
   - `symbol` (string, required): Function, method, or class name to find callers for.
@@ -121,7 +139,7 @@ Inbound call graph traversal: finds callers and inbound references to a function
   - `max_depth` (integer, default: 3): Maximum recursive call graph traversal depth.
 - **Returns**: Ranked inbound caller hierarchy and call sites.
 
-### 14. `code_dependencies`
+### 16. `code_dependencies`
 Outbound dependency graph: finds outbound function calls, class instantiations, and module imports.
 - **Parameters**:
   - `symbol` (string, required): Symbol name to find outbound dependencies for.
@@ -129,7 +147,7 @@ Outbound dependency graph: finds outbound function calls, class instantiations, 
   - `max_depth` (integer, default: 3): Maximum recursive dependency traversal depth.
 - **Returns**: Ranked outbound dependency paths.
 
-### 15. `code_impact`
+### 17. `code_impact`
 Blast-radius impact analysis: evaluates affected upstream symbols and files if a target symbol or file is changed or refactored.
 - **Parameters**:
   - `target` (string, required): Target symbol or file path to analyze.
@@ -137,7 +155,7 @@ Blast-radius impact analysis: evaluates affected upstream symbols and files if a
   - `max_depth` (integer, default: 3): Maximum traversal depth.
 - **Returns**: Risk level (LOW/MEDIUM/HIGH), impacted file and symbol counts, and upstream dependency paths.
 
-### 16. `code_index`
+### 18. `code_index`
 Indexes a file or directory into the structural code graph (AST + streaming regex parser with incremental sha256 cache).
 - **Parameters**:
   - `path` (string, default: `"."`): File or directory path to index.

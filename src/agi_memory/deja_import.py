@@ -164,8 +164,11 @@ def import_sessions(limit: int = 50, project: str | None = None,
     """Import deja digests into L1. Returns counts + created ids."""
     bin_path = find_deja_bin(deja_bin)
     if not bin_path:
-        return {"error": "deja binary not found", "listed": 0,
-                "imported": 0, "skipped": 0, "ids": []}
+        # deja distills with an LLM, so it is the better importer when present.
+        # Without it the native transcript readers still fill the vault.
+        return {"error": "deja binary not found -- use 'agi-memory history-import' "
+                         "for native claude/codex/opencode transcripts",
+                "listed": 0, "imported": 0, "skipped": 0, "ids": []}
     sessions = list_sessions(bin_path, limit, project, harness, since, runner)
     l1 = SessionLayer(project="global", db_path=db_path)
     existing = {o["title"].lower() for o in l1.list_observations(limit=2000)}

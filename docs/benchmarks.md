@@ -102,7 +102,50 @@ actually pays to keep memory available. Reproduce it with:
 python3 tests/stress_test.py   # reports "MCP Server RSS"
 ```
 
-The same run also prints "Stress Harness Peak RSS", which is much larger (~140MB)
+The same run also prints "Stress Harness Peak RSS", which is much larger (~110MB)
 and is **not** the server: it is the test process itself, which loads every
 layer, seeds a synthetic corpus and drives 100-way concurrency. Don't quote it.
+
+---
+
+## What the in-repo harness measures today
+
+The tables above come from a 13,988-observation production vault that is not in
+this repository, so they cannot be reproduced from a clone. What *is* in the repo
+is `tests/stress_test.py`, which seeds 1,000 synthetic observations and drives
+100-way concurrency. Run on an Apple Silicon macOS laptop (2026-09-27, v0.9.2):
+
+| Metric | In-repo harness (1,000 synthetic obs) | Production vault (13,988 obs) |
+|---|---|---|
+| L1 working recall (p50) | 4.52 ms | 0.56 ms |
+| L1 working recall (p95) | 7.33 ms | 0.96 ms |
+| L2 recursive graph traversal | 0.38 ms | 0.65 ms |
+| L3 episodic timeline retrieval | 0.297 ms | 0.226 ms |
+| L4 caller traversal | 112.5 ms | 10.71 ms |
+| L4 blast-radius impact | 1,546 ms | 392 ms |
+| Entity alias resolution | 8.68M lookups/sec (0.115 µs) | 4.11M lookups/sec (0.243 µs) |
+| Core memory block retrieval | 0.426 ms | 0.512 ms |
+| Full tiered recall (p50) | 4.81 ms | 2.16 ms |
+| Peak concurrency | 70.1 QPS | 730.9 QPS |
+| In-flight conflict detection | 3.64 ms | 5.06 ms |
+| Bi-temporal edge invalidation | 2.22 ms | 3.70 ms |
+| `session-start` hook overhead | 33.95 ms | 31.77 ms |
+| MCP server RSS | 30.58 MB | ~34.7 MB |
+
+The synthetic run is the slower one on recall and code-graph tiers, and the
+faster one on the rest. Neither row is a correction of the other: they are
+different corpora on different hardware, and both are machine-dependent. Quote
+the row that matches the dataset you are describing.
+
+The retrieval evals are the stable, cross-machine figures — they assert
+correctness as well as latency, so a regression shows up as a failure rather
+than as a slower number:
+
+| Eval | Score | Mean latency |
+|---|---|---|
+| `tests/eval_l1.py` | 10/10 (100%) | 0.62 ms |
+| `tests/eval_l2.py` | 6/6 (100%) | 0.47 ms |
+| `tests/eval_l3.py` | 10/10 (100%) | 0.35 ms |
+| `tests/eval_l4.py` | 25/25 (100%) | 0.36 ms |
+
 

@@ -82,13 +82,13 @@ Run the automated stdio protocol verification:
 ```bash
 agi-integrate test
 ```
-Verifies `initialize`, `ping`, and tools registration across all 16 native tools.
+Verifies `initialize`, `ping`, and tools registration across all 18 native tools.
 
 ---
 
 ## The Standard MCP Tools
 
-Every integrated tool gains access to 16 native tools across the four cognitive pillars:
+Every integrated tool gains access to 18 native tools across the four cognitive pillars:
 
 | Cognitive Pillar | MCP Tool | Primary Use | Example Query / Action |
 |---|---|---|---|
@@ -303,12 +303,23 @@ Append the standard Memory Discipline section from above.
 agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agi-memory.js
 agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agi-memory.js
 ```
-The generated zero-dependency plugin (`export default { id: "agi-memory", async setup(ctx) {} }`)
-shells out via `execFileSync(PY, [HOOKS_PY, verb], { input })`: session-start and
-user-prompt-submit via `ctx.session.hook("prompt", ...)`, injection via
-`ctx.session.hook("context", (e) => e.system.push({ type: "text", text }))`,
-pre-compact via `ctx.session.hook("compaction", ...)`, session-end via
-`ctx.event.subscribe()` on `session.idle`.
+The generated zero-dependency plugin is an OpenCode v2 plugin function —
+`export const AgiMemoryPlugin = async () => ({ ...hooks })` — which shells out via
+`execFileSync(PY, [HOOKS_PY, verb], { input })` for each lifecycle verb:
+
+| Hook | Verb | What it does |
+|---|---|---|
+| `chat.message` | `user-prompt-submit` | recall matching memories for a typed prompt |
+| `experimental.chat.system.transform` | `session-start` | inject the briefing once per session, then pending recall |
+| `experimental.session.compacting` | `pre-compact` | promote high-signal memories before context is dropped |
+| `tool.execute.after` | `post-tool` | log the run; a failure is paired with what followed it before |
+| `event` (`session.idle`) | `session-end` | close the session row, commit the vault, sync |
+
+There is deliberately no `tool.execute.before`: that hook's output carries only
+`args`, with no channel into the model, so a pre-tool recall line would go
+nowhere. Add it when OpenCode exposes a pre-tool context channel. Check what is
+actually wired at any time with `agi-integrate doctor`, which reads these same
+files and flags a plugin written for an older OpenCode API as stale.
 
 ---
 

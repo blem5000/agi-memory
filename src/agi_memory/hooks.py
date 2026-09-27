@@ -994,79 +994,110 @@ OPENCODE_PLUGIN_TEMPLATE = """\
 
 import { execFileSync } from "node:child_process";
 
-export const AgiMemoryPlugin = {
-  id: "agi-memory",
-  async setup(ctx) {
-    const PY = "@@PY@@";
-    const HOOKS_PY = "@@HOOKS_PY@@";
-    const seen = new Set();
-    const started = new Map();
-    const recalled = new Map();
+const PY = "@@PY@@";
+const HOOKS_PY = "@@HOOKS_PY@@";
 
-    const run = async (verb, stdin) => {
+// OpenCode names tools in lowercase; hooks.py keys off the Claude-style names.
+const TOOL_NAMES = { bash: "Bash", edit: "Edit", write: "Write", read: "Read" };
+
+export const AgiMemoryPlugin = async () => {
+  const seen = new Set();
+  const started = new Map();
+  const recalled = new Map();
+
+  const run = async (verb, payload) => {
+    try {
+      const opts = {
+        encoding: "utf8",
+        input: JSON.stringify(payload),
+        stdio: ["pipe", "pipe", "ignore"],
+      };
+      return execFileSync(PY, [HOOKS_PY, verb], opts).trim();
+    } catch {
+      return "";
+    }
+  };
+
+  // Session briefing, once per session id, held for the next system transform.
+  const startOnce = async (id) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    const res = await run("session-start", { session_id: id });
+    if (res) started.set(id, res);
+  };
+
+  return {
+    // A user message arrived: recall matching memories, stash them for the transform.
+    "chat.message": async (input, output) => {
       try {
-        const opts = {
-          encoding: "utf8",
-          input: stdin !== undefined ? stdin : undefined,
-          stdio: ["pipe", "pipe", "ignore"],
-        };
-        return execFileSync(PY, [HOOKS_PY, verb], opts).trim();
-      } catch {
-        return "";
-      }
-    };
+        // Fires for assistant turns too; only a typed prompt is a recall query.
+        if (output?.message && output.message.role && output.message.role !== "user") return;
+        const text = (output?.parts || [])
+          .filter((p) => p?.type === "text")
+          .map((p) => p.text || "")
+          .join(" ")
+          .trim();
+        if (!text) return;
+        const id = input?.sessionID || "default";
+        const memory = await run("user-prompt-submit", { session_id: id, prompt: text });
+        if (memory) recalled.set(id, memory);
+        else recalled.delete(id);
+      } catch {}
+    },
 
-    const startOnce = async (id) => {
-      if (seen.has(id)) return;
-      seen.add(id);
-      const res = await run("session-start", JSON.stringify({ session_id: id }));
-      if (res) started.set(id, res);
-    };
-
-    await ctx.session.hook("prompt", async (event) => {
-      const id = event?.sessionID || "default";
-      await startOnce(id);
-      const text = event?.prompt?.text || "";
-      const memoryCtx = text ? await run("user-prompt-submit", JSON.stringify({ prompt: text, session_id: id })) : "";
-      if (memoryCtx) recalled.set(id, memoryCtx);
-      else recalled.delete(id);
-    });
-
-    await ctx.session.hook("context", async (event) => {
-      const id = event?.session?.id || event?.sessionID || "default";
-      await startOnce(id);
-      const briefing = started.get(id);
-      if (briefing) {
-        event.system.push({ type: "text", text: briefing });
-        started.delete(id);
-      }
-      const recall = recalled.get(id);
-      if (recall) {
-        event.system.push({ type: "text", text: recall });
-      }
-    });
-
-    await ctx.session.hook("compaction", async (event) => {
-      const msg = await run("pre-compact");
-      if (msg) {
-        if (event?.context) event.context.push(msg);
-        if (event?.system) event.system.push({ type: "text", text: msg });
-      }
-    });
-
-    const controller = new AbortController();
-    void (async () => {
+    // The injection point: session briefing (once) then any pending recall.
+    "experimental.chat.system.transform": async (input, output) => {
       try {
-        for await (const ev of ctx.event.subscribe({ signal: controller.signal })) {
-          if (ev?.type === "session.idle") {
-            await run("session-end");
-          }
+        const id = input?.sessionID || "default";
+        await startOnce(id);
+        const briefing = started.get(id);
+        if (briefing) {
+          output.system.push(briefing);
+          started.delete(id);
+        }
+        const recall = recalled.get(id);
+        if (recall) {
+          output.system.push(recall);
+          recalled.delete(id);
         }
       } catch {}
-    })();
+    },
 
-    return () => controller.abort();
-  },
+    // Log the run so a failure can be paired with what came after it.
+    // ponytail: no tool.execute.before here -- its output carries only args, so a
+    // pre-tool recall line has no channel into the model; add when OpenCode
+    // exposes a pre-tool context channel.
+    "tool.execute.after": async (input, output) => {
+      try {
+        const args = { ...(input?.args || {}) };
+        if (args.filePath) args.file_path = args.filePath;  // hooks.py reads file_path
+        await run("post-tool", {
+          session_id: input?.sessionID || "default",
+          tool_name: TOOL_NAMES[input?.tool] || input?.tool || "",
+          tool_input: args,
+          tool_response: output?.output,
+        });
+      } catch {}
+    },
+
+    // Compaction is about to drop context: promote high-signal memories first.
+    "experimental.session.compacting": async (input, output) => {
+      try {
+        const msg = await run("pre-compact", { session_id: input?.sessionID });
+        if (msg) output.context.push(msg);
+      } catch {}
+    },
+
+    // session.idle closes the episodic row, commits the vault, and syncs.
+    event: async (input) => {
+      try {
+        const ev = input?.event;
+        if (ev?.type !== "session.idle") return;
+        const id = ev?.properties?.sessionID ?? ev?.properties?.sessionId;
+        await run("session-end", { session_id: id });
+      } catch {}
+    },
+  };
 };
 
 export default AgiMemoryPlugin;
@@ -1225,6 +1256,97 @@ def uninstall_all_hooks(scope: str = "user") -> Dict[str, Tuple[bool, str]]:
 # ============================================================================
 # Main Entry Point
 # ============================================================================
+
+# ---------------------------------------------------------------------------
+# Hook parity: what each assistant can deliver, and what is actually wired.
+#
+# These live next to the installers that write the configs, because a
+# capability claimed here that no installer provides is a claim, not a
+# feature. `agi-integrate doctor` prints this, so a row can never quietly
+# claim coverage an assistant's event model does not have.
+# ---------------------------------------------------------------------------
+HOOK_SURFACES: Dict[str, Dict[str, Any]] = {
+    "claude-code": {
+        "config": "settings.json hooks",
+        "point_of_action": "PreToolUse + PostToolUse",
+        "events": ("SessionStart", "UserPromptSubmit", "PreCompact", "SessionEnd", "Stop",
+                   "PreToolUse", "PostToolUse"),
+    },
+    "antigravity": {
+        "config": "hooks.json (PreInvocation, Stop)",
+        "point_of_action": None,  # no per-tool event in its hook model
+        "events": ("PreInvocation", "Stop"),
+    },
+    "opencode": {
+        "config": "plugins/agi-memory.js",
+        # tool.execute.after only: tool.execute.before carries args and no
+        # channel into the model, so a pre-tool recall line would go nowhere.
+        "point_of_action": "PostToolUse (plugin hook)",
+        "events": ("session-start", "user-prompt-submit", "pre-compact", "session-end",
+                   "post-tool"),
+    },
+}
+
+
+def _memory_hook_events(data: Dict[str, Any], key: str = "hooks") -> set:
+    """Event names in a hooks config that invoke this package."""
+    found = set()
+    for event, entries in (data.get(key) or {}).items():
+        for entry in entries if isinstance(entries, list) else []:
+            for h in (entry or {}).get("hooks", []) or []:
+                cmd = h.get("command", "") if isinstance(h, dict) else ""
+                if any(m in cmd for m in ("hooks.py", "agi-memory", "agent-memory", "agi-hooks")):
+                    found.add(event)
+                    break
+    return found
+
+
+def hook_parity(scope: str = "user") -> Dict[str, Any]:
+    """Per-harness hook capability plus what is installed right now.
+
+    Reads the same files the installers write, so `doctor` reports fact rather
+    than intent: a config that was never written, or was overwritten by a
+    hand edit, shows as not installed.
+    """
+    report: Dict[str, Any] = {}
+    claude = (Path.home() / ".claude" / "settings.json" if scope == "user"
+              else Path.cwd() / ".claude" / "settings.json")
+    try:
+        events = _memory_hook_events(json.loads(claude.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        events = set()
+    report["claude-code"] = {**HOOK_SURFACES["claude-code"], "config_path": str(claude),
+                             "installed": sorted(events)}
+
+    agy = (Path.home() / ".gemini" / "config" / "hooks.json" if scope == "user"
+           else Path.cwd() / ".agents" / "hooks.json")
+    try:
+        agy_data = json.loads(agy.read_text(encoding="utf-8")).get("agi-memory", {})
+        # "enabled" is a config flag next to the event lists, not an event.
+        agy_events = {e for e in (agy_data or {}) if e in HOOK_SURFACES["antigravity"]["events"]}
+    except (OSError, ValueError, AttributeError):
+        agy_events = set()
+    report["antigravity"] = {**HOOK_SURFACES["antigravity"], "config_path": str(agy),
+                             "installed": sorted(agy_events)}
+
+    plugin = opencode_plugin_path(scope)
+    try:
+        text = plugin.read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    # Presence of our marker is not proof of coverage: a plugin file written
+    # against an older OpenCode API imports fine and silently registers nothing.
+    # Require one current-API hook name before claiming the events.
+    if "AgiMemoryPlugin" in text and "tool.execute.after" in text:
+        installed = list(HOOK_SURFACES["opencode"]["events"])
+    elif text:
+        installed = ["STALE: written for an older OpenCode plugin API -- reinstall"]
+    else:
+        installed = []
+    report["opencode"] = {**HOOK_SURFACES["opencode"], "config_path": str(plugin),
+                          "installed": installed}
+    return report
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

@@ -79,7 +79,9 @@ _orig_find = di.find_deja_bin
 di.find_deja_bin = lambda explicit=None: None
 try:
     r3 = di.import_sessions(deja_bin="/nonexistent/deja-xyz", runner=_fake_runner)
-    assert r3["error"] == "deja binary not found", r3
+    # The message points at the native reader, which needs no binary at all.
+    assert r3["error"].startswith("deja binary not found"), r3
+    assert "history-import" in r3["error"], r3
 finally:
     di.find_deja_bin = _orig_find
 
