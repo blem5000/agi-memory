@@ -48,11 +48,24 @@ class ParityTests(unittest.TestCase):
         self.assertEqual(["Stop"], hooks.hook_parity("user")["antigravity"]["installed"])
 
     def test_legacy_opencode_plugin_reports_stale(self):
+        # The function shape the published docs describe is exactly what the
+        # installed loader rejects, so it must read as stale rather than as
+        # coverage.
         plugin = hooks.opencode_plugin_path("user")
         plugin.parent.mkdir(parents=True, exist_ok=True)
-        plugin.write_text("export const AgiMemoryPlugin = { id: 'agi-memory', setup(ctx){} }",
-                          encoding="utf-8")
+        plugin.write_text(
+            "export const AgiMemoryPlugin = async () => ({ event: async () => {} });\n"
+            "export default AgiMemoryPlugin;",
+            encoding="utf-8")
         self.assertIn("STALE", hooks.hook_parity("user")["opencode"]["installed"][0])
+
+    def test_module_object_without_hooks_is_stale(self):
+        plugin = hooks.opencode_plugin_path("user")
+        plugin.parent.mkdir(parents=True, exist_ok=True)
+        plugin.write_text("export default { id: 'agi-memory', async setup(ctx) {} }",
+                          encoding="utf-8")
+        installed = hooks.hook_parity("user")["opencode"]["installed"]
+        self.assertIn("STALE", installed[0])
 
     def test_current_opencode_plugin_reports_its_events(self):
         plugin = hooks.opencode_plugin_path("user")

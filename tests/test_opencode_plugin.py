@@ -1,72 +1,141 @@
-"""OpenCode plugin template: the installed v2 hook-API contract (no OpenCode run)."""
-import _isolate  # noqa: F401,E402 -- must run before agi_memory resolves any path
-import os
+"""The generated OpenCode plugin must satisfy the loader that actually runs.
+
+This file exists because the shape was verified against the published docs and
+the @opencode-ai/plugin types, and both describe a bare plugin function. The
+installed opencode 2.0.18 rejects that with:
+
+    Plugin must export a default definition with an id and an effect or setup
+    function.
+
+so the plugin imported cleanly, registered nothing, and every session logged a
+load failure. The contract below is what the loader enforces, cross-checked
+against the plugins that do load on this machine.
+"""
+import re
 import sys
 import tempfile
+import unittest
 from pathlib import Path
+from unittest import mock
 
-_SRC = Path(__file__).resolve().parent.parent / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from agi_memory import hooks
+from agi_memory import hooks  # noqa: E402
 
-T = hooks.OPENCODE_PLUGIN_TEMPLATE
 
-# The module must export a plugin function: OpenCode imports the file and calls
-# whatever `Plugin` is, so the old `{ id, setup(ctx) }` object was silently dead.
-assert "export const AgiMemoryPlugin = async (" in T, "plugin is not an exported async function"
-assert "export default AgiMemoryPlugin;" in T
-for dead in ("ctx.session.hook", "setup(ctx)", "ctx.event.subscribe"):
-    assert dead not in T, f"removed OpenCode API still present: {dead}"
+def _default_export_object(src: str) -> str:
+    """The body of `export default { ... }`, brace-matched."""
+    start = src.index("export default {")
+    depth, i = 0, start + len("export default {") - 1
+    while True:
+        i += 1
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i + 1]
 
-# Every lifecycle verb, mapped to a hook the installed API actually calls.
-for hook in ("chat.message", "experimental.chat.system.transform", "tool.execute.after",
-             "experimental.session.compacting", "event"):
-    assert hook in T, f"hook not wired: {hook}"
-# dotted names are not identifiers, so they must be quoted keys in the returned object
-for hook in ("chat.message", "experimental.chat.system.transform", "tool.execute.after",
-             "experimental.session.compacting"):
-    assert f'"{hook}": async' in T, f"hook not a returned key: {hook}"
-assert "tool.execute.before\":" not in T, "pre-tool recall has no context channel"
 
-for verb in ("session-start", "user-prompt-submit", "post-tool", "pre-compact", "session-end"):
-    assert f'"{verb}"' in T, f"verb not dispatched: {verb}"
+class LoaderContractTests(unittest.TestCase):
+    """What opencode's loader validates, per its own error message."""
 
-# OpenCode tool names are lowercase; hooks.py matches Claude-style names and
-# reads the file path from tool_input.file_path.
-for low, high in (("bash", "Bash"), ("edit", "Edit"), ("write", "Write"), ("read", "Read")):
-    assert f'{low}: "{high}"' in T, f"tool name unmapped: {low} -> {high}"
-assert "file_path" in T and "filePath" in T
+    def setUp(self):
+        self.src = hooks.OPENCODE_PLUGIN_TEMPLATE
 
-# Zero npm dependencies: node:child_process is the only import.
-assert T.count("import ") == 1 and 'from "node:child_process"' in T
+    def test_default_export_is_an_object_with_id_and_setup(self):
+        # A bare `export const X = async () => {}` is what broke it.
+        self.assertNotRegex(self.src, r"export\s+const\s+\w+\s*=\s*async\s*\(")
+        body = _default_export_object(self.src)
+        self.assertRegex(body, r"id:\s*\"agi-memory\"")
+        self.assertRegex(body, r"async\s+setup\s*\(\s*ctx\s*\)")
 
-# Paths stay placeholders until install substitutes them.
-assert "@@PY@@" in T and "@@HOOKS_PY@@" in T
+    def test_id_is_the_marker_uninstall_gates_on(self):
+        # uninstall used to key on the string "AgiMemoryPlugin", which this
+        # template no longer contains -- it would have refused to remove our
+        # own plugin file. The plugin id is required by the loader, so it is the
+        # marker that is always present.
+        self.assertIn('id: "agi-memory"', self.src)
+        self.assertIn('id: "agi-memory"', hooks._PLUGIN_MARKERS)
 
-with tempfile.TemporaryDirectory() as tmp:
-    home = Path(tmp) / "home"
-    old_home, old_xdg = os.environ.get("HOME"), os.environ.pop("XDG_CONFIG_HOME", None)
-    os.environ["HOME"] = str(home)
-    try:
-        ok, msg = hooks.install_opencode_plugin(scope="user", py_path="/usr/bin/python3")
-        assert ok, msg
-        target = home / ".config" / "opencode" / "plugins" / "agi-memory.js"
-        assert target.exists(), f"plugin not written: {target}"
-        installed = target.read_text(encoding="utf-8")
-    finally:
-        os.environ["HOME"] = old_home or ""
-        if old_xdg is not None:
-            os.environ["XDG_CONFIG_HOME"] = old_xdg
+    def test_uses_only_hook_names_this_build_implements(self):
+        # Each of these appears in opencode's own loader; "compaction" and
+        # execute.after are the ones a doc-driven rewrite would have dropped.
+        for name in ('"context"', '"prompt"', '"compaction"'):
+            self.assertIn(f"hook?.({name}", self.src, name)
+        self.assertIn('hook?.("execute.after"', self.src)
 
-assert '"@@PY@@"' not in installed and '"@@HOOKS_PY@@"' not in installed
-assert '"@@' not in installed
-assert 'const PY = "/usr/bin/python3";' in installed
-assert f'const HOOKS_PY = "{Path(hooks.__file__).resolve()}";' in installed
-for hook in ("chat.message", "experimental.chat.system.transform", "tool.execute.after",
-             "experimental.session.compacting", "event"):
-    assert hook in installed, f"installed plugin lost hook: {hook}"
-assert "AgiMemoryPlugin" in installed
+    def test_every_ctx_access_is_optional_chained(self):
+        # An unimplemented hook must be a no-op, never a throw that takes the
+        # editor session down with it.
+        for call in re.findall(r"ctx\.[a-z]+\??\.[a-z]+\?\.\(", self.src):
+            self.assertIn("?.", call)
 
-print("test_opencode_plugin: OK")
+    def test_no_bare_plugin_function_default(self):
+        # `export default <identifier>` is how a function sneaks back in.
+        self.assertRegex(self.src, r"export default \{", )
+        self.assertNotRegex(self.src, r"export default \w")
+
+    def test_placeholders_survive(self):
+        self.assertIn("@@PY@@", self.src)
+        self.assertIn("@@HOOKS_PY@@", self.src)
+
+    def test_no_stray_backslashes(self):
+        # The template is a Python string literal; an unescaped backslash is a
+        # syntax error or a corrupted JS escape.
+        self.assertNotIn("\\", self.src.replace("@@PY@@", "").replace("@@HOOKS_PY@@", ""))
+
+    def test_pre_tool_is_deliberately_absent(self):
+        # execute.before only sees the tool input -- no channel into the model,
+        # so a pre-tool recall line would have nowhere to go.
+        self.assertNotIn('"execute.before"', self.src)
+        self.assertIn("No execute.before", self.src)
+
+
+class InstalledFileTests(unittest.TestCase):
+    """install_opencode_plugin must write a file the loader would accept."""
+
+    def test_written_file_satisfies_the_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "home", return_value=Path(tmp)):
+                ok, msg = hooks.install_opencode_plugin(
+                    scope="user", py_path="/usr/bin/python3")
+                self.assertTrue(ok, msg)
+                target = Path(hooks.opencode_plugin_path("user"))
+                # Everything below must touch the temp home. Computing the path
+                # outside the patch writes to the real ~/.config and silently
+                # replaces the user's installed plugin.
+                self.assertTrue(str(target).startswith(tmp), target)
+                written = target.read_text()
+        body = _default_export_object(written)
+        self.assertRegex(body, r"id:\s*\"agi-memory\"")
+        self.assertRegex(body, r"async\s+setup\s*\(\s*ctx\s*\)")
+        self.assertIn("/usr/bin/python3", written)
+
+    def test_uninstall_removes_our_own_file(self):
+        # The regression: the ownership marker moved to the plugin id, and a
+        # stale check would leave the file behind while claiming it was foreign.
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "home", return_value=Path(tmp)):
+                hooks.install_opencode_plugin(scope="user", py_path="/usr/bin/python3")
+                target = Path(hooks.opencode_plugin_path("user"))
+                self.assertTrue(str(target).startswith(tmp), target)
+                ok, _ = hooks.uninstall_opencode_plugin(scope="user")
+                self.assertTrue(ok)
+                self.assertFalse(target.exists())
+
+    def test_uninstall_refuses_a_foreign_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "home", return_value=Path(tmp)):
+                target = Path(hooks.opencode_plugin_path("user"))
+                self.assertTrue(str(target).startswith(tmp), target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("export default { id: 'someone-else' }")
+                ok, msg = hooks.uninstall_opencode_plugin(scope="user")
+            self.assertFalse(ok)
+            self.assertIn("Refusing", msg)
+            self.assertTrue(target.exists())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

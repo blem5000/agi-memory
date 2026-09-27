@@ -303,23 +303,38 @@ Append the standard Memory Discipline section from above.
 agi-integrate hooks opencode          # user scope: ~/.config/opencode/plugins/agi-memory.js
 agi-integrate hooks opencode --scope project   # project scope: .opencode/plugins/agi-memory.js
 ```
-The generated zero-dependency plugin is an OpenCode v2 plugin function —
-`export const AgiMemoryPlugin = async () => ({ ...hooks })` — which shells out via
-`execFileSync(PY, [HOOKS_PY, verb], { input })` for each lifecycle verb:
+The generated zero-dependency plugin is an OpenCode module object — `export default { id: "agi-memory", async setup(ctx) {} }` — which shells out via `execFileSync(PY, [HOOKS_PY, verb], { input })` for each lifecycle verb:
 
 | Hook | Verb | What it does |
 |---|---|---|
-| `chat.message` | `user-prompt-submit` | recall matching memories for a typed prompt |
-| `experimental.chat.system.transform` | `session-start` | inject the briefing once per session, then pending recall |
-| `experimental.session.compacting` | `pre-compact` | promote high-signal memories before context is dropped |
-| `tool.execute.after` | `post-tool` | log the run; a failure is paired with what followed it before |
-| `event` (`session.idle`) | `session-end` | close the session row, commit the vault, sync |
+| `session.hook("prompt")` | `user-prompt-submit` | recall matching memories for a typed prompt |
+| `session.hook("context")` | `session-start` | inject the briefing once per session, then pending recall |
+| `session.hook("compaction")` | `pre-compact` | promote high-signal memories before context is dropped |
+| `tool.hook("execute.after")` | `post-tool` | log the run; a failure is paired with what followed it before |
+| `event.subscribe` → `session.idle` | `session-end` | close the session row, commit the vault, sync |
 
-There is deliberately no `tool.execute.before`: that hook's output carries only
-`args`, with no channel into the model, so a pre-tool recall line would go
-nowhere. Add it when OpenCode exposes a pre-tool context channel. Check what is
-actually wired at any time with `agi-integrate doctor`, which reads these same
-files and flags a plugin written for an older OpenCode API as stale.
+The module shape is not a style choice. OpenCode 2.0.18's loader rejects anything
+that is not a default export carrying an `id` plus a `setup` or `effect`
+function:
+
+```
+Plugin must export a default definition with an id and an effect or setup function.
+```
+
+A bare `export const Plugin = async (ctx) => ({...})` — what the published
+plugin docs and the `@opencode-ai/plugin` types describe — fails that check, and
+fails it *quietly enough to look installed*: the module imports, the plugin
+registers nothing, and every session logs a load warning. So the template targets
+the loader this build actually runs, cross-checked with
+`tests/test_opencode_plugin.py` and against the plugins already loading on the
+machine. Every `ctx` call is optional-chained, so a hook a future build drops is
+a no-op rather than a thrown error that takes the session down.
+
+There is deliberately no `execute.before`: that hook's output carries only the
+tool input, with no channel into the model, so a pre-tool recall line would have
+nowhere to go. Add it when OpenCode exposes a pre-tool context channel. Check
+what is actually wired at any time with `agi-integrate doctor`, which reads these
+same files and flags a plugin written for an older loader as stale.
 
 ---
 
