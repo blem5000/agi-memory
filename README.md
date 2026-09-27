@@ -1,11 +1,10 @@
 # agi-memory
 
-> **Retired.** This project is archived and no longer maintained. Its successor
-> for shared coding-agent memory is
-> [deja-vu](https://github.com/vshulcz/deja-vu), which builds the memory layer
-> from session history already on disk instead of record-forward notes.
-> Install it with `curl -fsSL https://raw.githubusercontent.com/vshulcz/deja-vu/main/install.sh | sh`
-> followed by `deja install --auto`.
+> **Active.** Day-1 history import from [deja-vu](https://github.com/vshulcz/deja-vu)
+> is built in: `agi-memory deja-import` distills your existing session transcripts
+> into curated L1 observations, so recall works from moment zero instead of an
+> empty vault. Record-forward curation (rationale, supersession, pins) stays here;
+> raw transcript search stays in deja.
 
 [![CI](https://github.com/kdbhalala/agi-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/kdbhalala/agi-memory/actions)
 [![PyPI](https://img.shields.io/pypi/v/agi-memory.svg)](https://pypi.org/project/agi-memory/)
@@ -71,6 +70,21 @@ pipx install agi-memory            # or: brew tap kdbhalala/agi-memory https://g
 agi-integrate install all          # connect every assistant it finds on your machine
 agi-integrate status               # see what got connected
 ```
+
+## Day-1: import deja history
+
+New vault, years of sessions already on disk — start full, not empty:
+
+```bash
+agi-memory deja-import --limit 50 --dry-run   # preview what would import
+agi-memory deja-import --limit 200 --since 90d
+agi-bootstrap --repo . --with-deja             # README + git commits + deja in one pass
+```
+
+Each deja session becomes one L1 observation (`origin="deja-import"`,
+title `[deja:<short-id>] ...`, project mapped from deja). Idempotent:
+re-runs skip imported sessions and tiny transcripts (`--min-words 800`).
+Filter with `--project`, `--harness`, `--since`.
 
 Other install options, including a one-line script and running from source, are
 in [Installation](docs/installation.md).

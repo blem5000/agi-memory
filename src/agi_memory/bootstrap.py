@@ -272,6 +272,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--repo", default=".", help="Target repository directory (default: .)")
     parser.add_argument("--project", default=None, help="Project name override")
     parser.add_argument("--max-commits", type=int, default=20, help="Max git commits to parse (default: 20)")
+    parser.add_argument("--with-deja", action="store_true", help="Also import deja session digests (day-1 history)")
+    parser.add_argument("--deja-limit", type=int, default=50)
+    parser.add_argument("--deja-since", default=None, help="e.g. 30d")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
 
     args = parser.parse_args(argv)
@@ -280,6 +283,20 @@ def main(argv: list[str] | None = None) -> None:
         max_commits=args.max_commits,
         project=args.project
     )
+    if args.with_deja:
+        try:
+            try:
+                from agi_memory import deja_import
+            except ImportError:
+                import deja_import
+            dres = deja_import.import_sessions(
+                limit=args.deja_limit, project=args.project,
+                since=args.deja_since, db_path=get_default_db())
+            res["deja_listed"] = dres.get("listed", 0)
+            res["deja_imported"] = dres.get("imported", 0)
+            res["deja_ids"] = dres.get("ids", [])
+        except Exception as e:
+            res["deja_error"] = str(e)[:200]
 
     if args.json:
         print(json.dumps(res, indent=2))
@@ -297,6 +314,10 @@ def main(argv: list[str] | None = None) -> None:
             parts.append(f"{res['commits_bootstrapped']} git commits")
         detail = f" ({', '.join(parts)})" if parts else ""
         print(f"[✓] Bootstrapped {count} memories for project '{proj}'{detail}.")
+    if res.get("deja_imported"):
+        print(f"[✓] Imported {res['deja_imported']} deja sessions.")
+    elif res.get("deja_error"):
+        print(f"[!] deja import skipped: {res['deja_error']}")
 
 
 if __name__ == "__main__":

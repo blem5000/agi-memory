@@ -90,7 +90,7 @@ TOOLS = [
                                     "project": {"type": "string", "description": "Target project name"},
                                     "supersedes": {"type": "string", "description": "ID (#123) or keywords of an older memory this replaces. Requires `rationale` (why the older one no longer holds). MUTATES it: its type flips to superseded, so a caller gating destructive operations should treat memory_record with this set as one."},
                                     "rationale": {"type": "string", "description": "The constraints and tradeoffs behind the decision. A later session cannot re-examine a conclusion it has no reasoning for, so record it whenever the why is not obvious from the text alone."},
-                                    "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped"], "default": "agent-inferred", "description": "user-confirmed ONLY if the user stated or approved it; agent-inferred for anything you concluded yourself, however confident. An inflated value is worse than none."},
+                                    "origin": {"type": "string", "enum": ["user-confirmed", "agent-inferred", "bootstrapped", "deja-import"], "default": "agent-inferred", "description": "user-confirmed ONLY if the user stated or approved it; agent-inferred for anything you concluded yourself, however confident. An inflated value is worse than none."},
                                     "relations": {"type": "array",
                                                   "description": "Knowledge graph triples stored in L2",
                                                   "items": {"type": "object",
@@ -913,6 +913,58 @@ def cmd_timeline(argv: list[str]) -> None:
     print(res)
 
 
+def cmd_wip(argv: list[str]) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="agi-memory wip",
+                                     description="What the last session was doing: task, outcome, files, last command")
+    parser.add_argument("--project", "-p", default=None, help="Project filter")
+    args = parser.parse_args(argv)
+    try:
+        from agi_memory.layers.episodic_layer import EpisodicLayer
+    except ImportError:
+        from layers.episodic_layer import EpisodicLayer
+    ep = EpisodicLayer(project=args.project)
+    sess = ep.get_last_session(project=args.project)
+    if not sess:
+        print("(no sessions recorded yet)")
+        return
+    print(EpisodicLayer.format_recap(sess))
+    try:
+        full = ep.get_session(sess["session_id"]) or {}
+        cmds = [e for e in full.get("events", []) if e.get("event_type") == "command"]
+        if cmds:
+            import json as _json
+            last = cmds[-1]
+            try:
+                failed = (_json.loads(last.get("details") or "{}")).get("exit", 0) != 0
+            except (ValueError, AttributeError):
+                failed = False
+            print(f"Last command ({'failed' if failed else 'ok'}): {(last.get('summary') or '')[:200]}")
+    except Exception:
+        pass
+
+
+def cmd_friction(argv: list[str]) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(prog="agi-memory friction",
+                                     description="Errors recurring across sessions")
+    parser.add_argument("--project", "-p", default=None, help="Project filter")
+    parser.add_argument("--min-sessions", type=int, default=3)
+    parser.add_argument("--limit", "-n", type=int, default=10)
+    args = parser.parse_args(argv)
+    try:
+        from agi_memory.layers.episodic_layer import EpisodicLayer
+    except ImportError:
+        from layers.episodic_layer import EpisodicLayer
+    rows = EpisodicLayer(project=args.project).failed_command_stats(
+        project=args.project, min_sessions=args.min_sessions)[:args.limit]
+    if not rows:
+        print("(no recurring errors recorded yet -- post-tool hooks log runs as they happen)")
+        return
+    for r in rows:
+        print(f"{r['signature']} -- {r['sessions']} sessions, {r['hits']} failures")
+
+
 def cmd_outcome(argv: list[str]) -> None:
     import argparse
     parser = argparse.ArgumentParser(prog="agi-memory outcome",
@@ -1093,6 +1145,13 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "bootstrap":
             bootstrap.main(argv[1:])
             return
+        elif cmd in ("deja-import", "deja_import"):
+            try:
+                from agi_memory import deja_import
+            except ImportError:
+                import deja_import
+            deja_import.main(argv[1:])
+            return
         elif cmd == "log":
             cmd_log(argv[1:])
             return
@@ -1143,6 +1202,12 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "outcome":
             cmd_outcome(argv[1:])
             return
+        elif cmd == "wip":
+            cmd_wip(argv[1:])
+            return
+        elif cmd == "friction":
+            cmd_friction(argv[1:])
+            return
         elif cmd == "structure":
             cmd_structure(argv[1:])
             return
@@ -1187,6 +1252,8 @@ def main(argv: list[str] | None = None) -> None:
             print("  agi-memory timeline [--limit 5]      Inspect past session timelines and recaps")
             print("  agi-memory outcome <completed|abandoned|blocked|superseded>")
             print("                                       Record how this session ended")
+            print("  agi-memory wip                     What the last session was doing")
+            print("  agi-memory friction                Errors recurring across sessions")
             print("  agi-memory structure [path]          Show hierarchical symbol structure")
             print("  agi-memory callers <symbol>          Find inbound callers & references across codebase")
             print("  agi-memory dependencies <symbol>     Find outbound dependencies & calls")

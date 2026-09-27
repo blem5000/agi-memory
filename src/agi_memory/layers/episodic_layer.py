@@ -50,6 +50,20 @@ _RESUME_WARNING = {
                "a rejected approach. Confirm before continuing it.",
 }
 
+# Commands a fix-suggestion must never propose (deja `fix` rule): merges,
+# force pushes and deletions destroy work instead of recovering it.
+DESTRUCTIVE_CMD = re.compile(
+    r"(git\s+merge\b|git\s+push\b.*--?f(orce)?\b|rm\s+(-[a-z]*r|--recursive)|"
+    r"git\s+(reset\s+--hard|clean\s+-f|push\b.*:)|drop\s+table|delete\s+from|"
+    r":\(\)\s*\{\s*:\|\:&\s*\}|mkfs|dd\s+if=)",
+    re.I,
+)
+
+
+def looks_destructive(cmd: str) -> bool:
+    """True when a command must never be suggested as a fix."""
+    return bool(DESTRUCTIVE_CMD.search(cmd or ""))
+
 
 def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Optional[str]]:
     """Detect current git branch and commit HEAD hash."""
@@ -549,6 +563,149 @@ class EpisodicLayer(MemoryLayer):
             "summary": summary,
             "details": det_str
         }
+
+    @staticmethod
+    def normalize_command(cmd: str) -> str:
+        """Group key for a command: binary + first two args, numbers/paths stripped."""
+        toks = (cmd or "").strip().split()
+        if not toks:
+            return ""
+        head = [toks[0].split("/")[-1]] + toks[1:3]
+        head = [re.sub(r"\d+", "#", t) for t in head]
+        return " ".join(head)[:120]
+
+    def upsert_imported(self, session_id: str, project: str, goal: str = "",
+                        started_at: str | None = None, ended_at: str | None = None,
+                        touched_files: list | None = None) -> bool:
+        """Backfill one historical session (e.g. from deja). True when inserted."""
+        con = self._get_con()
+        cur = con.cursor()
+        try:
+            cur.execute("""
+                INSERT INTO episodic_sessions
+                    (session_id, project, goal, started_at, ended_at, touched_files, status)
+                VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP),
+                        COALESCE(?, CURRENT_TIMESTAMP), ?, 'ended')
+                ON CONFLICT(session_id) DO NOTHING
+            """, (session_id, project, goal[:500], started_at, ended_at,
+                  json.dumps((touched_files or [])[:50])))
+            inserted = cur.rowcount > 0
+        except sqlite3.Error:
+            inserted = False
+        con.commit()
+        con.close()
+        return inserted
+
+    def recent_commands(self, binary: str, project: str | None = None,
+                        limit: int = 5, ok_only: bool = True) -> List[Dict[str, Any]]:
+        """Newest command events for a binary (details JSON: command, exit)."""
+        proj = project or self.project or "global"
+        con = self._get_con(mode="ro")
+        try:
+            rows = con.execute("""
+                SELECT summary, details, session_id, timestamp FROM episodic_events
+                WHERE project = ? AND event_type = 'command'
+                  AND (summary = ? OR summary LIKE ? ESCAPE '\\')
+                ORDER BY id DESC LIMIT ?
+            """, (proj, binary, f"{binary} %", limit * 3)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        con.close()
+        out = []
+        for summary, details, sid, ts in rows:
+            try:
+                d = json.loads(details) if details else {}
+            except (json.JSONDecodeError, TypeError):
+                d = {}
+            if ok_only and d.get("exit", 0) != 0:
+                continue
+            out.append({"command": summary, "exit": d.get("exit", 0),
+                        "session": sid, "at": ts})
+            if len(out) >= limit:
+                break
+        return out
+
+    def error_followups(self, error_sig: str, project: str | None = None,
+                        limit: int = 3) -> List[Dict[str, Any]]:
+        """Commands that ran after this same error before, in sessions where it passed.
+
+        Matches deja's `fix`: a prior session hit the error (nonzero command whose
+        summary contains the signature), and a later command in that session
+        exited 0 -- that command is the candidate fix.
+        """
+        proj = project or self.project or "global"
+        sig = (error_sig or "").strip().lower()[:160]
+        if len(sig) < 12:
+            return []
+        con = self._get_con(mode="ro")
+        try:
+            rows = con.execute("""
+                SELECT session_id, summary, details FROM episodic_events
+                WHERE project = ? AND event_type = 'command'
+                ORDER BY session_id, id
+            """, (proj,)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        con.close()
+        by_session: Dict[str, list] = {}
+        for sid, summary, details in rows:
+            try:
+                d = json.loads(details) if details else {}
+            except (json.JSONDecodeError, TypeError):
+                d = {}
+            text = f"{d.get('error', '')}\n{summary}".lower()
+            by_session.setdefault(sid, []).append((summary, d, text))
+        found = []
+        for sid, evs in by_session.items():
+            for i, (summary, d, text) in enumerate(evs):
+                if d.get("exit", 0) == 0 or sig not in text:
+                    continue
+                for later, ld, _ in evs[i + 1:i + 4]:
+                    if ld.get("exit", 0) == 0 and (later or "").strip():
+                        cmd = (later or "").strip()[:200]
+                        if not looks_destructive(cmd) and cmd not in [f["command"] for f in found]:
+                            found.append({"command": cmd, "after": summary[:120], "session": sid})
+                        break
+            if len(found) >= limit:
+                break
+        return found[:limit]
+
+    def failed_command_stats(self, project: str | None = None,
+                             min_sessions: int = 3) -> List[Dict[str, Any]]:
+        """Failed-command signatures recurring across sessions (deja `friction`).
+
+        Only nonzero-exit commands count; one session retrying in a loop is one
+        witness, not many.
+        """
+        proj = project or self.project or "global"
+        con = self._get_con(mode="ro")
+        try:
+            rows = con.execute("""
+                SELECT summary, session_id, details FROM episodic_events
+                WHERE project = ? AND event_type = 'command'
+            """, (proj,)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        con.close()
+        groups: Dict[str, Dict[str, Any]] = {}
+        for summary, sid, details in rows:
+            try:
+                failed = (json.loads(details) if details else {}).get("exit", 0) != 0
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                failed = False
+            if not failed:
+                continue
+            norm = self.normalize_command(summary or "")
+            if not norm:
+                continue
+            g = groups.setdefault(norm, {"signature": norm, "sessions": set(), "hits": 0})
+            g["sessions"].add(sid)
+            g["hits"] += 1
+        out = [{"signature": g["signature"], "sessions": len(g["sessions"]),
+                "hits": g["hits"]} for g in groups.values()
+               if len(g["sessions"]) >= min_sessions]
+        out.sort(key=lambda r: (-r["sessions"], -r["hits"]))
+        return out
 
     def get_timeline(self, project: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
         """Retrieve chronological timeline of past sessions."""

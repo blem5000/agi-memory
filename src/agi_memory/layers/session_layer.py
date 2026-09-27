@@ -68,13 +68,14 @@ STOPWORDS = frozenset(
 # ranked identically, and only the first is something later sessions should
 # treat as settled. Recorded at write time, shown in recall, and used to break
 # ties in ranking; it deliberately never outranks relevance.
-ORIGINS = ("user-confirmed", "agent-inferred", "bootstrapped")
+ORIGINS = ("user-confirmed", "agent-inferred", "bootstrapped", "deja-import")
 DEFAULT_ORIGIN = "agent-inferred"
 # agent-inferred is the common case and needs no label; the other two change
 # how the reader should treat the memory, so they are marked.
 _ORIGIN_TAG = {
     "user-confirmed": "[confirmed by the user] ",
     "bootstrapped": "[bootstrapped from git history, unverified] ",
+    "deja-import": "[imported from deja session history, unverified] ",
 }
 
 
@@ -1118,6 +1119,10 @@ class SessionLayer(MemoryLayer):
                 "narrative": r[5],
                 "created_at": r[6],
             } for r in rows]
+        except sqlite3.Error:
+            # Schema not yet created (e.g. a peer layer made the file first):
+            # read paths degrade to empty, record() bootstraps on write.
+            return []
         finally:
             con.close()
 

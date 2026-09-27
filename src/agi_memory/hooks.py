@@ -5,6 +5,8 @@ Supported Lifecycle Events:
 - session-start: Proactive memory context injection (pinned core blocks + top precedents)
 - user-prompt-submit: Matching memories and past sessions pushed to the prompt; first prompt becomes the session goal
 - stop:          Asks the agent once for the why when a session changed code and recorded nothing
+- pre-tool:      One line on what this file/command already has before it runs
+- post-tool:     Logs the run; after a failure, names what followed that error before
 - pre-compact:   Auto-promotion of L1 working memories into durable L2 graph before context compression
 - session-end:   Instant background Git sync and compaction
 - pre-commit:    Offline test suite and memory invariant validation
@@ -424,6 +426,105 @@ def hook_stop(project: Optional[str] = None) -> None:
         print(json.dumps({"decision": "block", "reason": reason}))
 
 
+# Matchers for a failed Bash response. Claude Code's PostToolUse carries no
+# exit-code field, so a nonzero run is read off its output (same heuristic
+# deja applies to indexed tool output).
+_FAILURE_MARKERS = re.compile(
+    r"(error|failed|failure|traceback|exception|panic|exit code [1-9]|command not found)",
+    re.I,
+)
+
+_FILE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "Read", "NotebookEdit"})
+
+
+def _normalize_error(text: str) -> str:
+    sig = re.sub(r"\s+", " ", (text or "").lower())
+    sig = re.sub(r"\b[0-9a-f]{7,40}\b", "#", sig)  # hashes, SHAs
+    sig = re.sub(r"\d+", "#", sig)
+    sig = re.sub(r"/[\w.~-]+(?:/[\w.~-]+)+", "<path>", sig)
+    return sig.strip()[:160]
+
+
+def _ensure_ep_session(ep, sid: Optional[str], proj: str) -> Optional[str]:
+    """Session row for this hook sid, registering it when session-start never ran."""
+    if not sid:
+        return None
+    try:
+        if not ep.get_session(sid):
+            ep.start_session(session_id=sid, project=proj)
+        return sid
+    except Exception:
+        return None
+
+
+def hook_pre_tool(project: Optional[str] = None) -> None:
+    """PreToolUse: one line on what this file/command already has. Silent on miss."""
+    payload = _read_hook_payload()
+    tool = payload.get("tool_name", "")
+    inp = payload.get("tool_input") or {}
+    proj = project or detect_project()
+    sys.path.insert(0, str(REPO_DIR))
+    try:
+        try:
+            from agi_memory.layers.episodic_layer import EpisodicLayer
+        except ImportError:
+            from layers.episodic_layer import EpisodicLayer
+        ep = EpisodicLayer(project=proj)
+        sid = _ensure_ep_session(ep, payload.get("session_id"), proj)
+        if tool in _FILE_TOOLS and inp.get("file_path"):
+            from pathlib import Path as _P
+            p = _P(str(inp["file_path"]))
+            hint = prompt_recall(f"{p.stem} {p.parent.name}", project=proj, session_id=sid)
+            if hint:
+                first = next((ln for ln in hint.splitlines() if ln.startswith("- ")), "")
+                if first:
+                    print(f"[agent-memory] Prior work on {p.name}: {first[2:200]}")
+        elif tool == "Bash" and inp.get("command"):
+            cmd = str(inp["command"]).strip()
+            binary = cmd.split()[0].split("/")[-1] if cmd.split() else ""
+            if binary:
+                prior = ep.recent_commands(binary, project=proj, limit=1)
+                if prior and prior[0]["command"] != cmd:
+                    print(f"[agent-memory] Last working {binary}: {prior[0]['command'][:200]}")
+    except Exception:
+        pass
+
+
+def hook_post_tool(project: Optional[str] = None) -> None:
+    """PostToolUse: log the run; on failure, suggest what followed that error before."""
+    payload = _read_hook_payload()
+    tool = payload.get("tool_name", "")
+    inp = payload.get("tool_input") or {}
+    proj = project or detect_project()
+    sys.path.insert(0, str(REPO_DIR))
+    try:
+        try:
+            from agi_memory.layers.episodic_layer import EpisodicLayer
+        except ImportError:
+            from layers.episodic_layer import EpisodicLayer
+        ep = EpisodicLayer(project=proj)
+        sid = _ensure_ep_session(ep, payload.get("session_id"), proj)
+        if not sid:
+            return
+        if tool == "Bash" and inp.get("command"):
+            cmd = str(inp["command"]).strip()[:300]
+            resp = str(payload.get("tool_response", ""))
+            failed = bool(_FAILURE_MARKERS.search(resp))
+            det = {"command": cmd, "exit": 1 if failed else 0}
+            if failed:
+                det["error"] = _normalize_error(resp[:600])
+            ep.record_event(sid, "command", cmd, det, project=proj)
+            if failed:
+                sig = _normalize_error(resp[:600])
+                for f in ep.error_followups(sig, project=proj, limit=3):
+                    print(f"[agent-memory] After this error before: {f['command'][:200]}")
+        elif tool in _FILE_TOOLS and inp.get("file_path"):
+            ep.record_event(sid, "edit", str(inp["file_path"])[:300],
+                            str(inp["file_path"]), project=proj)
+    except Exception:
+        pass
+
+
 def hook_pre_compact(project: Optional[str] = None) -> None:
     """PreCompact: Curate high-signal working memory into L2 knowledge graph before context loss."""
     proj = project or detect_project()
@@ -739,6 +840,8 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     cmd_end = f'"{py}" "{hooks_py}" session-end'
     cmd_prompt = f'"{py}" "{hooks_py}" user-prompt-submit'
     cmd_stop = f'"{py}" "{hooks_py}" stop'
+    cmd_pre = f'"{py}" "{hooks_py}" pre-tool'
+    cmd_post = f'"{py}" "{hooks_py}" post-tool'
 
     def _is_memory_hook(entry: Dict[str, Any]) -> bool:
         return any(
@@ -750,7 +853,8 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
         )
 
     # Purge any previous or stale memory hooks to eliminate duplicates or broken paths
-    for ev in ("SessionStart", "PreCompact", "SessionEnd", "UserPromptSubmit", "Stop"):
+    for ev in ("SessionStart", "PreCompact", "SessionEnd", "UserPromptSubmit", "Stop",
+               "PreToolUse", "PostToolUse"):
         if ev in hooks:
             hooks[ev] = [e for e in hooks[ev] if not _is_memory_hook(e)]
 
@@ -773,6 +877,8 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     _ensure_hook("SessionEnd", cmd_end)
     _ensure_hook("UserPromptSubmit", cmd_prompt)
     _ensure_hook("Stop", cmd_stop)
+    _ensure_hook("PreToolUse", cmd_pre, matcher="Edit|Write|MultiEdit|Bash")
+    _ensure_hook("PostToolUse", cmd_post, matcher="Bash")
 
     # Sanitize and ensure Claude Code permission format (mcp__<server>__*)
     perms = data.get("permissions", {})
@@ -1120,6 +1226,12 @@ def main() -> None:
     p_stop = subparsers.add_parser("stop", help="Ask once for the why behind a session's changes (JSON on stdin)")
     p_stop.add_argument("--project", "-p", help="Project name override")
 
+    p_pre = subparsers.add_parser("pre-tool", help="One line on what this file/command already has (JSON on stdin)")
+    p_pre.add_argument("--project", "-p", help="Project name override")
+
+    p_post = subparsers.add_parser("post-tool", help="Log the run; suggest follow-ups after a failure (JSON on stdin)")
+    p_post.add_argument("--project", "-p", help="Project name override")
+
     subparsers.add_parser("vault-sync", help="Pull and push the memory vault (session-end runs this detached)")
 
     p_compact = subparsers.add_parser("pre-compact", help="Promote high-signal L1 memories before compaction")
@@ -1156,6 +1268,10 @@ def main() -> None:
         hook_user_prompt_submit(getattr(args, "project", None))
     elif args.action == "stop":
         hook_stop(getattr(args, "project", None))
+    elif args.action == "pre-tool":
+        hook_pre_tool(getattr(args, "project", None))
+    elif args.action == "post-tool":
+        hook_post_tool(getattr(args, "project", None))
     elif args.action == "vault-sync":
         hook_vault_sync()
     elif args.action == "pre-compact":
