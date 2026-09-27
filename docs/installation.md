@@ -72,21 +72,59 @@ agi-integrate status
 # from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate status
 ```
 
-### 2. Verify MCP Handshake
+### 2. Bring Your Existing History With You
+Installing agi-memory into a machine that already has months of agent work used
+to leave you starting from nothing. The installer now finds that history and
+**asks** before reading any of it:
+
+```
+  Session History Import
+  Session history already on this machine:
+
+  claude       3913 sessions   readable
+  codex          53 sessions   readable
+  opencode       17 sessions   readable
+  agy                        skipped: conversations are protobuf blobs with no published schema
+  hermes                     skipped: sessions are API request dumps containing auth headers -- never read
+  cursor                      skipped: no reader for this tool yet
+  ...
+
+Import your session history? [Y/n]:
+```
+
+Answer yes and every session is indexed into episodic history — so
+`memory_timeline` and `memory_wip` work immediately — and the 50 most recent
+also become searchable memories. It takes a few seconds, runs entirely
+on-device, and is idempotent: a second run adds nothing.
+
+- **Nothing is read until you say yes.** A non-interactive run (`--yes` absent,
+  output piped, CI) skips it and tells you the command to run instead.
+- `--yes` accepts on your behalf. `--no-history` never offers it.
+- `--history-limit N` changes how many recent sessions become memories.
+- To do it later: `agi-memory history-import`.
+
+Two tools are skipped on purpose, and the reason is worth knowing: `hermes`
+stores outbound API request bodies including `Authorization` headers, so
+importing them would copy credentials into a git-synced vault; `agy` stores
+conversations as protobuf blobs with no published schema, so reading them means
+guessing at a private wire format. The rest have no reader yet — the installer
+says so rather than quietly implying full coverage.
+
+### 3. Verify MCP Handshake
 Validate the stdio protocol and tool registrations:
 ```bash
 agi-integrate test
 # from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate test
 ```
 
-### 3. Scaffold Any Project Repository
+### 4. Scaffold Any Project Repository
 Equip any existing or new codebase with universal multi-assistant rules, modular context, and `.mcp.json`:
 ```bash
 agi-integrate init /path/to/my-repo --name my-repo
 # from a source checkout: PYTHONPATH=src python3 -m agi_memory.integrate init /path/to/my-repo --name my-repo
 ```
 
-### 4. Automated Lifecycle Hooks
+### 5. Automated Lifecycle Hooks
 Lifecycle hooks are installed for Claude Code, Antigravity and OpenCode (plus git), injecting context on startup and syncing on session end. The other assistants get the same episodic tracking without hooks: the MCP server registers a session on its first memory tool call.
 ```bash
 # Automated setup (happens automatically during install all and init):

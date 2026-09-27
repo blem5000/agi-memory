@@ -218,6 +218,91 @@ def opencode_sessions(db_path: str | None = None, limit: int = 50) -> List[Dict[
 
 READERS = {"codex": codex_sessions, "claude": claude_sessions, "opencode": opencode_sessions}
 
+# Which supported assistant's transcripts we know how to read, keyed by the
+# integration name used everywhere else (`agi-integrate install <name>`).
+TOOL_READERS = {"claude": "claude", "codex": "codex", "opencode": "opencode"}
+
+# Detected, and deliberately not read. Both were checked on disk, and both fail
+# for a reason that is not worth an adapter:
+#
+#   hermes -- ~/.hermes/sessions holds `request_dump_*.json`: outbound LLM API
+#             request bodies including Authorization headers. Importing those
+#             would copy credentials into a git-synced vault. Never read it.
+#   agy    -- ~/.gemini/antigravity-cli/conversations/*.db stores trajectories
+#             as protobuf blobs with no published schema. Reading it means
+#             guessing at a private wire format, which yields confident garbage
+#             rather than memories.
+#
+# Say so out loud instead of appearing to support them.
+BLOCKED = {
+    "hermes": "sessions are API request dumps containing auth headers -- never read",
+    "agy": "conversations are protobuf blobs with no published schema",
+}
+
+
+def scan(detected: dict) -> List[Dict[str, Any]]:
+    """Per-tool history availability. `detected` maps tool name -> bool.
+
+    Reports every detected tool, including the ones with no reader, because a
+    silent gap reads as "we covered everything" -- the failure this module
+    exists to prevent.
+    """
+    rows = []
+    for tool, present in sorted(detected.items()):
+        if not present:
+            continue
+        reader = TOOL_READERS.get(tool)
+        count = 0
+        try:
+            if reader:
+                count = len(READERS[reader](limit=100000))
+        except Exception:
+            count = 0
+        # Always say why something was skipped. An empty reason here renders as
+        # a blank in the install report, which reads as "covered" when it is
+        # the opposite.
+        if reader:
+            reason = ""
+        elif tool in BLOCKED:
+            reason = BLOCKED[tool]
+        else:
+            reason = "no reader for this tool yet"
+        rows.append({
+            "tool": tool,
+            "reader": reader,
+            "sessions": count,
+            "reason": reason,
+        })
+    return rows
+
+
+def import_all(limit: int = 50, index_all: bool = True,
+               db_path=None) -> Dict[str, Any]:
+    """Index every readable tool's history, then digest the most recent sessions.
+
+    Indexing all of it is cheap -- one metadata row per session, no LLM, no
+    summarisation -- and it is what makes `memory_timeline` and `memory_wip`
+    useful on day one. L1 digests are capped at `limit`, because each one is a
+    row every future recall has to sift through.
+    """
+    per_tool: Dict[str, Dict[str, Any]] = {}
+    totals = {"indexed": 0, "imported": 0}
+    for tool, reader in TOOL_READERS.items():
+        row: Dict[str, Any] = {}
+        try:
+            if index_all:
+                r = import_index(harness=reader, limit=0, db_path=db_path)
+                row["indexed"] = r.get("indexed", 0)
+                row["listed"] = r.get("listed", 0)
+            d = import_sessions(harness=reader, limit=limit, db_path=db_path)
+            row["imported"] = d.get("imported", 0)
+        except Exception as e:
+            row["error"] = str(e)[:120]
+        per_tool[tool] = row
+        totals["indexed"] += row.get("indexed", 0)
+        totals["imported"] += row.get("imported", 0)
+    return {"per_tool": per_tool, **totals}
+
 
 def list_sessions(harness: str = "all", limit: int = 50, **kwargs) -> List[Dict[str, Any]]:
     """Newest-first sessions from one harness or all of them. Unreadable

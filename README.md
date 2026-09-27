@@ -72,24 +72,43 @@ agi-integrate status               # see what got connected
 
 ## Day-1: import your session history
 
-New vault, years of sessions already on disk — start full, not empty:
+New vault, years of sessions already on disk — start full, not empty. The
+installer offers this and **asks first**:
+
+```
+  Session History Import
+  claude       3913 sessions   readable
+  codex          53 sessions   readable
+  opencode       17 sessions   readable
+  agy                        skipped: conversations are protobuf blobs with no published schema
+  hermes                     skipped: sessions are API request dumps containing auth headers -- never read
+
+Import your session history? [Y/n]:
+```
+
+Answer yes and every session is indexed into episodic history, so
+`memory_timeline` and `memory_wip` work immediately; the 50 most recent also
+become searchable memories. A few seconds, entirely on-device, idempotent.
+Nothing is read until you agree, and a non-interactive run skips it and tells
+you the command instead.
 
 ```bash
 agi-memory history-import --limit 20            # recent sessions -> L1 digests
 agi-memory history-import --index                # every session -> episodic history
-agi-memory history-import --harness codex --dry-run
+agi-memory history-import --harness codex --project my-app
 agi-bootstrap --repo . --with-history             # README + git commits + history, one pass
 ```
 
+Read today: **Claude Code, Codex, OpenCode.** Every other detected tool is
+listed at install with the reason it is skipped, so the gap is visible rather
+than implied. `hermes` is refused on purpose — its session files are outbound
+API request bodies including auth headers.
+
 Each session becomes one L1 observation (`origin="history-import"`, title
 `[claude:1a2b3c4d] ...`, project taken from the session's working directory).
-Idempotent: re-runs skip sessions already imported. Filter with `--project` and
-`--harness` (`claude`, `codex`, `opencode`, `all`).
-
-A digest is the session's own words — goal, the prompts that drove it, files
-touched — not a distillation, because nothing here calls an LLM. That is enough
-for `memory_recall` to answer "have we been here before"; `memory_timeline` and
-`memory_wip` read the same rows.
+Idempotent: re-runs skip sessions already imported. A digest is the session's
+own words — goal, the prompts that drove it, files touched — not a distillation,
+because nothing here calls an LLM.
 
 Other install options, including a one-line script and running from source, are
 in [Installation](docs/installation.md).

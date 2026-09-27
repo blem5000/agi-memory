@@ -1006,6 +1006,82 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("Rules: Memory discipline rules or skills injected\n")
 
 
+def offer_history_import(non_interactive: bool = False, assume_yes: bool = False,
+                         assume_no: bool = False, limit: int = 50) -> Optional[dict]:
+    """Offer to import the coding history already on this machine.
+
+    A new install starts with an empty vault, which is the worst moment to
+    discover it: everything the user already did with every other tool looks
+    like it never happened. So the offer is made here, at install, rather than
+    left in a command they have to know they can type.
+
+    Consent is the point, not a formality. Their transcripts are read only
+    after they say yes; `--yes` says it for them; a non-interactive run (CI, a
+    pipe) reads nothing it was not explicitly told to.
+    """
+    if assume_no:
+        return None
+    try:
+        from agi_memory import history_import
+    except ImportError:
+        import history_import
+
+    detected = {}
+    for t in INTEGRATIONS:
+        try:
+            detected[t.name] = bool(t.is_detected())
+        except Exception:
+            detected[t.name] = False
+    try:
+        rows = history_import.scan(detected)
+    except Exception as e:
+        print(f"  [!] history scan unavailable: {e}")
+        return None
+    readable = [r for r in rows if r["reader"] and r["sessions"]]
+    if not readable:
+        print("  No readable session history found for any installed tool.\n")
+        return None
+
+    print("\n" + "=" * 70)
+    print("  Session History Import")
+    print("=" * 70)
+    print("Session history already on this machine:\n")
+    for r in rows:
+        if r["reader"] and r["sessions"]:
+            print(f"  {r['tool']:<10} {r['sessions']:>6} sessions   readable")
+        else:
+            why = r["reason"] or "no reader for this tool yet"
+            print(f"  {r['tool']:<10} {'':>6}          skipped: {why}")
+    total = sum(r["sessions"] for r in readable)
+    if not assume_yes and not (non_interactive or not sys.stdin.isatty()):
+        print(f"\n{total} sessions found. Indexing all of them makes `memory_timeline` and")
+        print(f"`memory_wip` useful immediately; the {limit} most recent also become")
+        print("searchable memories. Nothing leaves this machine either way.")
+        try:
+            ans = input("Import your session history? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if ans not in ("", "y", "yes"):
+            print("  Skipped. Run 'agi-memory history-import' whenever you want it.\n")
+            return None
+    elif not assume_yes:
+        print("  Skipped (not interactive). Re-run 'agi-memory history-import' -- or pass")
+        print("  --yes to this installer -- to import it.\n")
+        return None
+
+    res = history_import.import_all(limit=limit)
+    for tool, row in res["per_tool"].items():
+        if row.get("error"):
+            print(f"  [{'✗'}] {tool}: {row['error']}")
+        else:
+            print(f"  [✓] {tool:<10} indexed {row.get('indexed', 0)}, "
+                  f"digested {row.get('imported', 0)}")
+    print(f"[✓] Session history imported: {res['indexed']} sessions indexed, "
+          f"{res['imported']} digests.\n")
+    return res
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     py_path = args.python or detect_python()
     srv_path = args.server or detect_server()
@@ -1087,6 +1163,15 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     if not getattr(args, "skip_bootstrap", False):
         setup_bootstrap_interactive(non_interactive=getattr(args, "yes", False))
+
+    # After the repo's own memories, so the offer sits last and the user's very
+    # first prompt already has their history behind it.
+    if not getattr(args, "skip_history", False):
+        offer_history_import(
+            non_interactive=getattr(args, "yes", False),
+            assume_yes=getattr(args, "yes", False),
+            assume_no=getattr(args, "no_history", False),
+            limit=getattr(args, "history_limit", 50))
 
 
 def setup_sync_interactive(non_interactive: bool = False, auto_gh: bool = False) -> None:
@@ -1813,6 +1898,10 @@ def main() -> None:
     p_install.add_argument("--auto-gh", action="store_true", help="Auto-create private GitHub repo if gh is available")
     p_install.add_argument("--skip-sync", action="store_true", help="Skip Git sync setup during install")
     p_install.add_argument("--skip-bootstrap", action="store_true", help="Skip automatic Git/README cold-start memory seeding")
+    p_install.add_argument("--no-history", action="store_true",
+                           help="Do not offer to import existing session history from installed coding tools")
+    p_install.add_argument("--history-limit", type=int, default=50,
+                           help="Recent sessions to turn into searchable memories (default: 50)")
 
     # bootstrap
     p_bootstrap = subparsers.add_parser("bootstrap", help="Bootstrap initial memories from Git history and README.md")
