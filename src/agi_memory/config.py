@@ -50,33 +50,6 @@ def resolve_agent_id(harness: str = "") -> tuple[str, str]:
     return f"{host}:{os.getpid()}:{tag}"[:200], PROCESS
 
 
-def agent_alive(agent_id: str) -> bool:
-    """Is the process that wrote this session still running?
-
-    This is the signal the old 12-hour window was guessing at. That window
-    answered "is anyone still working on this project?" by asking "did
-    anything happen recently?", which is why two concurrent agents shared a
-    session and why a peer's work was reported as yours. Asking the OS whether
-    the owning pid still exists answers the question directly.
-
-    A declared id names an agent we cannot probe, so it counts as alive: only
-    that agent may reuse its own session. Pid reuse can make a dead writer look
-    alive, which costs one extra session row, never a merged one.
-    """
-    parts = (agent_id or "").split(":")
-    if len(parts) < 2 or not parts[1].isdigit():
-        return bool(agent_id)
-    try:
-        os.kill(int(parts[1]), 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True   # running, just not ours to signal
-    except (OSError, ValueError):
-        return True
-    return True
-
-
 def attest_write_origin(origin: str | None) -> tuple[str, str]:
     """Downgrade a trust claim an MCP caller cannot back. Returns (origin, why).
 

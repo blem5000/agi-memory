@@ -146,64 +146,68 @@ class ObservationProvenanceTests(unittest.TestCase):
 
 
 class ReusePolicyTests(unittest.TestCase):
-    """Reuse stays the default; only a *live* peer forces a new session.
+    """Reuse stays the default; only a session still taking writes forces a new one.
 
     The 12-hour window this replaced could not tell "the last CLI call already
-    closed" from "another agent is working right now", so it merged both. The
-    test is the distinction the old heuristic could not make.
+    finished" from "another agent is working right now", so it merged both. The
+    discriminator is the session's last recorded event, not the pid: os.kill
+    cannot probe liveness portably -- on Windows os.kill(pid, 0) terminates the
+    process, which is how the Windows CI run caught it.
     """
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.db = Path(self.tmp.name) / "m.db"
         self.addCleanup(self.tmp.cleanup)
-        # _ensure_session memoises per (project, agent); start each case clean.
         from agi_memory import mcp_server
         mcp_server._SESSION_REGISTERED.clear()
         self.addCleanup(mcp_server._SESSION_REGISTERED.clear)
 
-    def _ensure(self, agent_id, pid=None):
-        from agi_memory import mcp_server
-        with mock.patch.dict(os.environ, {"AGI_AGENT_ID": agent_id}, clear=True), \
-             mock.patch.object(mcp_server, "EpisodicLayer",
-                               lambda **kw: EpisodicLayer(db_path=self.db, **kw)), \
-             mock.patch.object(mcp_server, "detect_project", create=True, return_value="demo"):
-            return mcp_server._ensure_session("demo")
-
-    def test_dead_writer_is_adopted_not_duplicated(self):
-        # A pid that cannot exist: the previous CLI call has exited.
-        self._ensure("host:999999:codex")
-        first = EpisodicLayer(db_path=self.db).get_last_session(project="demo")
-        self._SESSION_REGISTERED_CLEAR()
-        self._ensure("host:999998:codex")
-        second = EpisodicLayer(db_path=self.db).get_last_session(project="demo")
-        self.assertEqual(first["session_id"], second["session_id"],
-                         "a finished writer must not spawn a new session")
-        self.assertEqual("host:999998:codex", second["agent"],
-                         "adoption should stamp the new writer")
-
-    def _SESSION_REGISTERED_CLEAR(self):
+    def _ensure(self, agent_id):
         from agi_memory import mcp_server
         mcp_server._SESSION_REGISTERED.clear()
+        with mock.patch.dict(os.environ, {"AGI_AGENT_ID": agent_id}, clear=True), \
+             mock.patch.object(mcp_server, "EpisodicLayer",
+                               lambda **kw: EpisodicLayer(db_path=self.db, **kw)):
+            return mcp_server._ensure_session("demo")
 
-    def test_live_peer_forces_a_separate_session(self):
-        live = f"{os.uname().nodename}:{os.getpid()}:peer"
-        self._ensure("host:999999:codex")
-        self._SESSION_REGISTERED_CLEAR()
-        # The peer's pid is our own, so it is trivially alive.
-        self._ensure("host:999997:claude")
+    def _event(self, session_id, seconds_ago=0):
+        # Written through SQLite's own clock, because that is what log_event
+        # does and what _wrote_recently compares against.
         ep = EpisodicLayer(db_path=self.db)
-        ep.start_session(project="demo", agent=live)
-        self._SESSION_REGISTERED_CLEAR()
-        self._ensure("host:999996:opencode")
+        con = ep._get_con()
+        con.execute("INSERT INTO episodic_events (session_id, project, event_type, "
+                    "summary, details, timestamp) VALUES (?,?,?,?,?, "
+                    "datetime('now', ?))",
+                    (session_id, "demo", "command", "pytest", "{}",
+                     f"-{int(seconds_ago)} seconds"))
+        con.commit()
+        con.close()
+
+    def test_quiet_writer_is_adopted_not_duplicated(self):
+        self._ensure("host:1:codex")
+        ep = EpisodicLayer(db_path=self.db)
+        first = ep.get_last_session(project="demo")
+        # Its last event was an hour ago: the writer is gone.
+        self._event(first["session_id"], seconds_ago=3600)
+        self._ensure("host:2:codex")
+        second = ep.get_last_session(project="demo")
+        self.assertEqual(first["session_id"], second["session_id"],
+                         "a finished writer must not spawn a new session")
+        self.assertEqual("host:2:codex", second["agent"], "adoption should stamp the writer")
+
+    def test_active_writer_forces_a_separate_session(self):
+        self._ensure("host:1:codex")
+        ep = EpisodicLayer(db_path=self.db)
+        first = ep.get_last_session(project="demo")
+        self._event(first["session_id"])   # just now: a peer is mid-flight
+        self._ensure("host:2:claude")
         rows = ep.get_timeline(project="demo")
-        self.assertGreaterEqual(len(rows), 2,
-                                "a live peer holding the project must not be merged into")
-        self.assertIn("host:999996:opencode", [r["agent"] for r in rows])
+        self.assertEqual(2, len(rows), "a live peer must not be merged into")
+        self.assertIn("host:2:claude", [r["agent"] for r in rows])
 
     def test_first_call_of_a_fresh_project_always_starts_one(self):
-        self._ensure("host:999995:codex")
-        rows = EpisodicLayer(db_path=self.db).get_timeline(project="demo")
-        self.assertEqual(1, len(rows))
+        self._ensure("host:3:codex")
+        self.assertEqual(1, len(EpisodicLayer(db_path=self.db).get_timeline(project="demo")))
 
 
 class McpPathTests(unittest.TestCase):

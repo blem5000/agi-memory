@@ -23,7 +23,7 @@ try:
     from agi_memory.layers.episodic_layer import EpisodicLayer
     from agi_memory.layers.code_layer import CodeLayer
     from agi_memory.layers.graph_layer import GraphLayer
-    from agi_memory.config import agent_alive, attest_write_origin, resolve_agent_id
+    from agi_memory.config import attest_write_origin, resolve_agent_id
     from agi_memory.recall import recall
     from agi_memory import bootstrap, promote, sync, vault
     from agi_memory.vault import append_tombstone_to_vault
@@ -35,7 +35,7 @@ except ImportError:
     from layers.episodic_layer import EpisodicLayer
     from layers.code_layer import CodeLayer
     from layers.graph_layer import GraphLayer
-    from config import agent_alive, attest_write_origin, resolve_agent_id
+    from config import attest_write_origin, resolve_agent_id
     from recall import recall
     import bootstrap
     import promote
@@ -311,6 +311,32 @@ def _started_recently(started_at, hours: int = 12) -> bool:
     return _dt.datetime.now(_dt.timezone.utc) - started < _dt.timedelta(hours=hours)
 
 
+_ACTIVE_WRITE_WINDOW_S = 120
+
+
+def _wrote_recently(ep, session_id: str, window: int = _ACTIVE_WRITE_WINDOW_S) -> bool:
+    """Did this session record an event inside the window?
+
+    Asked in SQL on purpose. Event timestamps are SQLite's CURRENT_TIMESTAMP,
+    which is UTC, while time.mktime reads a string as local time -- so doing
+    this arithmetic in Python made every event look 5-6 hours in the future on a
+    non-UTC machine, and no session was ever reusable. datetime('now') is the
+    same clock as CURRENT_TIMESTAMP, so the comparison needs no parsing at all.
+    """
+    try:
+        con = ep._get_con(mode="ro")
+        try:
+            row = con.execute(
+                "SELECT 1 FROM episodic_events WHERE session_id = ? "
+                "AND timestamp >= datetime('now', ?) LIMIT 1",
+                (session_id, f"-{int(window)} seconds")).fetchone()
+        finally:
+            con.close()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _ensure_session(project):
     """Give this server process an episodic session for the project it works in.
 
@@ -356,9 +382,16 @@ def _ensure_session(project):
                       and _started_recently(holder.get("started_at")))
         # A live process still holding this project's active session is the case
         # the 12-hour window could not see. Reuse is right when the session is
-        # ours, or when its writer is gone -- which is every sequential CLI call
-        # from a hook-less assistant, and the reason reuse stays the default.
-        contended = active and bool(held_by) and held_by != agent and agent_alive(held_by)
+        # ours, or when its writer has gone quiet -- which is every sequential
+        # CLI call from a hook-less assistant, and the reason reuse stays the
+        # default.
+        #
+        # "Gone quiet" is the last time the session recorded an event, not its
+        # start: a working agent writes events continuously, a finished one
+        # stops. Probing the pid with os.kill would be more precise and is not
+        # portable -- on Windows os.kill(pid, 0) terminates the process.
+        contended = (active and bool(held_by) and held_by != agent
+                     and _wrote_recently(ep, holder["session_id"]))
         if contended:
             ep.start_session(project=proj, agent=agent)
         elif active:
