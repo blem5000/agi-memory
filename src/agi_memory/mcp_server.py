@@ -241,6 +241,23 @@ for _t in TOOLS:
 
 
 
+def _findings_block(refs, project, layer=None) -> str:
+    """Evidence about the memories just recalled, for the agent to judge.
+
+    Never asserts that a memory is wrong. See findings.py for why there is no
+    contradiction detector here and no age-based decay.
+
+    The database comes from the caller's layer, not the default: a recall
+    against any other store must not be handed findings read from this one.
+    """
+    try:
+        from agi_memory import findings as _findings
+        return _findings.render(_findings.for_observations(
+            refs, project=project, db_path=getattr(layer, "db_path", None)))
+    except Exception:
+        return ""
+
+
 def _hits_text(hits):
     return "\n---\n".join(h.text for h in hits) or "(no hits)"
 
@@ -438,9 +455,10 @@ def call_tool(name, args):
         hits = l1.search(query, limit)
         l1.mark_shown([h.ref for h in hits])
         recent_text = _hits_text(hits) if hits else _miss_text(query, project, l1)
+        findings = _findings_block([h.ref for h in hits], project, l1)
         if core_block:
-            return f"{core_block}\n\n## recent\n{recent_text}"
-        return recent_text
+            return f"{core_block}\n\n## recent\n{recent_text}{findings}"
+        return recent_text + findings
     if name == "memory_recall_deep":
         query = str(args.get("query", "")).strip()
         if not query:

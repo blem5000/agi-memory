@@ -97,10 +97,30 @@ then the trust tier.
 **Still not solved, and named rather than hidden:** nothing detects that a
 memory has become *wrong* — a memory that was correct and is no longer keeps
 winning searches until a human or agent supersedes it. Recency makes the newest
-answer easier to find; it does not know which one is true. This is the same gap
-the wider field calls memory staleness, and the honest position is that the
-mechanism is a supersession workflow plus read receipts, not automatic
-invalidation.
+answer easier to find; it does not know which one is true.
+
+What ships instead is a **findings block** appended to `memory_recall`: evidence
+about the memories just returned, with the judgement left to the agent reading
+it. No finding claims a memory is wrong.
+
+| Finding | Signal | Coverage today |
+|---|---|---|
+| `references N file(s) that no longer exist` | The memory's file references, checked against the code graph | Only for **indexed** projects — `agi-memory index`. An unindexed path is unknown, not gone. |
+| `is an agent inference, surfaced Nx and never confirmed` | `origin=agent-inferred`, read receipts ≥3, no downstream citation | Accrues as the store is used; 3 candidates on a 15k store today |
+| `was written N days ago and has been surfaced Nx` | Age + traffic, together | A prompt to look, never an invalidation |
+
+Two things were measured and deliberately **not** built:
+
+- **A contradiction detector.** Grouping live memories by shared concept terms
+  produced 318 groups, all noise — the `concepts` column is boilerplate
+  (`decision`, `pattern`) plus canonical terms, so memories group by the word
+  "works" or "solution". Grouping by title prefix gave 1,046 groups that are
+  near-duplicate commit records. There is no reliable mechanical signal for
+  "same subject" in this data, let alone "disagrees". Deciding that two memories
+  conflict is a judgement, and a rule that makes it fails invisibly.
+- **Age-based decay.** Age is not validity: "port 8080 is required behind the
+  proxy" is true for years, and decay demotes exactly the load-bearing facts.
+
 
 ### 4. Dead-End Avoidance & Actionability
 
