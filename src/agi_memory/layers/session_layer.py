@@ -1160,7 +1160,11 @@ class SessionLayer(MemoryLayer):
                 params.append(project)
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
-            sql += " ORDER BY id DESC LIMIT ?"
+            # Newest by when it was written, not by id. The vault merge gave
+            # 14,897 imported records their own original ids, so ordering by id
+            # returned September rows while today had hundreds of newer ones.
+            # id breaks ties, because several records can share a second.
+            sql += " ORDER BY created_at_epoch DESC, id DESC LIMIT ?"
             params.append(limit)
             rows = cur.execute(sql, params).fetchall()
             return [{

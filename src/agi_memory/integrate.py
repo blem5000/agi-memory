@@ -1224,6 +1224,14 @@ def cmd_install(args: argparse.Namespace) -> None:
         git_res = hooks.install_git_hooks(py_path=py_path)
         if git_res[0]:
             print(f"  [✓] Git hooks: {git_res[1]}")
+            # Say what was just done to the repository. It persists after this
+            # command exits and runs on every future commit and push, and until
+            # now the installer said nothing.
+            print("       This wrote hooks into .git/hooks of the current repository:")
+            print("         post-commit  records a summary of each commit into memory")
+            print("         pre-push     closes the session and syncs the memory vault")
+            print("       They run on every commit and push from now on. Remove with:")
+            print("         agi-integrate uninstall")
     except Exception as e:
         print(f"  [!] Hook setup skipped: {e}")
 
