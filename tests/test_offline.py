@@ -255,6 +255,28 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert not _l1t.search("qqqzzzwwwvvv", limit=3), "fallback must not match arbitrary input"
     assert _SLt._fragments("abc") == [], "short words yield no fragments"
 
+# Hit.score now carries FTS5 relevance (bm25 negated, so higher = better).
+# The corpus must be wide enough that "authentication" is rare -- bm25's idf is
+# ~0 when a term sits in half the records, which would make an exact hit score
+# ~0 and prove nothing about ordering.
+with tempfile.TemporaryDirectory() as score_dir:
+    from agi_memory.layers.session_layer import SessionLayer as _SLs
+    _l1s = _SLs(project="score", db_path=Path(score_dir) / "score.db")
+    _l1s.record("Migrated authentication to short-lived JWT tokens.", title="Auth", project="score")
+    for _i in range(5):
+        _l1s.record(f"Deployment record {_i} rotates service accounts in the cluster.",
+                    title=f"dep{_i}", project="score")
+    _strong = _l1s.search("authentication", limit=3)
+    assert _strong and _strong[0].score > 0.4, (
+        f"exact hits must carry a positive relevance score, got {getattr(_strong[0], 'score', None) if _strong else None}")
+    _fuzzy2 = _l1s.search("autentication", limit=3)
+    assert _fuzzy2 and 0 < _fuzzy2[0].score <= 0.4, "fuzzy hits stay capped in (0, 0.4]"
+    assert _strong[0].score > _fuzzy2[0].score, "an exact hit must outrank the fuzzy one"
+    # weaker match on the same corpus still scores below the strong one
+    _weak = _l1s.search("cluster", limit=3)
+    assert _weak and 0 <= _weak[0].score < _strong[0].score, (
+        "a token in most records must score below a rare token")
+
 # Read-path fold: an exact title gets one slot in the results and the fold is
 # announced with the id it hid. Nothing is refused at write time -- every row
 # stays in the store, named on the survivor, so silence is never a lie.

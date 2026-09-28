@@ -549,7 +549,7 @@ class SessionLayer(MemoryLayer):
         # the MATCH below raised "no such table: observations_fts" and the
         # connection leaked, once per process, on the very first recall.
         try:
-            sql = """SELECT observations.id FROM observations_fts
+            sql = """SELECT observations.id, rank FROM observations_fts
                      JOIN observations ON observations.id = observations_fts.rowid
                      WHERE observations_fts MATCH ?"""
             # A bare OR of every token ranks a body that happens to mention all
@@ -589,7 +589,7 @@ class SessionLayer(MemoryLayer):
             if not rows and tokens:
                 prefix_tokens = [f'"{t}"*' for t in tokens if len(t) >= 3]
                 if prefix_tokens:
-                    sql_pfx = """SELECT observations.id FROM observations_fts
+                    sql_pfx = """SELECT observations.id, rank FROM observations_fts
                                  JOIN observations ON observations.id = observations_fts.rowid
                                  WHERE observations_fts MATCH ?"""
                     args_pfx = [" OR ".join(prefix_tokens)]
@@ -615,7 +615,16 @@ class SessionLayer(MemoryLayer):
 
         finally:
             con.close()
-        hits = self._bodies_by_id([str(i) for (i,) in rows])
+        # FTS5 `rank` is bm25: negative, lower = better. Negated into Hit.score
+        # so higher = better, matching the fuzzy cap below and every other
+        # layer. Recall can then tell a record that is a strong match for the
+        # query from one that merely shares a token; before this the score was
+        # 0.0 for every exact hit. Only relevance, not the sort key above (which
+        # also folds titles, nudges recency and prefers user-confirmed origin).
+        scores = {str(r[0]): -float(r[1]) for r in rows if len(r) > 1}
+        hits = self._bodies_by_id([str(r[0]) for r in rows])
+        for h in hits:
+            h.score = scores.get(h.ref, h.score)
         hits = self._collapse_same_title(hits, limit)
         if fuzzy:
             # Measured on the real vault, roughly one in seven of these is not
