@@ -521,12 +521,24 @@ class SessionLayer(MemoryLayer):
                 by = f"{host} {pid} {harness}"
             who = f" (via {by[:48]})" if by else ""
             by_id[str(i)] = Hit(text=f"#{i} {tag}[{p}] {t}: {body}{why_str}{who}".replace("  ", " "),
-                                source=self.name, ref=str(i))
+                                source=self.name, ref=str(i),
+                                # Carries the title out of this fetch so the caller can
+                                # group rows that are the same fact recorded twice;
+                                # parsing it back out of `text` is impossible, because
+                                # titles may themselves contain ": ".
+                                meta={"title_key": re.sub(r"[^a-z0-9]", "", (t or "").lower())})
         return [by_id[str(i)] for i in ids if str(i) in by_id]
 
     def _via_sqlite(self, query: str, limit: int) -> list[Hit]:
         if not self.db_path.exists():
             return []
+        # More rows than the caller asked for: exact-title siblings are folded
+        # below, and without a tail to backfill from a fold would hand back
+        # fewer slots than `limit` -- a short answer is the silent degradation
+        # this store is not allowed to have.
+        # ponytail: 4x held on the real store; if one title group (the largest
+        # there has 214 members) ever swallows the whole window, raise it or fold less.
+        fetch = limit * 4 if limit > 0 else limit  # a negative limit means "all", as in SQL
         tokens = [t for t in re.findall(r"[a-z0-9]+", query.lower())
                   if len(t) > 2 and t not in STOPWORDS] or re.findall(
                       r"[a-z0-9]+", query.lower())
@@ -570,7 +582,7 @@ class SessionLayer(MemoryLayer):
                     f"(rank - {RECENCY_BOOST} / (1.0 + ((? - observations.created_at_epoch) / {RECENCY_TAU_MS}.0))) ASC, "
                     "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC "
                     "LIMIT ?")
-            args += [phrase, int(time.time() * 1000), limit]
+            args += [phrase, int(time.time() * 1000), fetch]
             rows = con.execute(sql, args).fetchall()
 
             # Fallback: prefix wildcard matching if standard query returned 0 rows
@@ -588,7 +600,7 @@ class SessionLayer(MemoryLayer):
                         args_pfx.append(self.project)
                     sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
                         "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
-                    args_pfx.append(limit)
+                    args_pfx.append(fetch)
                     rows = con.execute(sql_pfx, args_pfx).fetchall()
 
             # Last resort: tolerate a typo INSIDE a word. Stemming repairs damage at
@@ -598,12 +610,13 @@ class SessionLayer(MemoryLayer):
             # never outrank a real match.
             fuzzy = False
             if not rows and tokens:
-                rows = self._typo_fallback(con, tokens, limit)
+                rows = self._typo_fallback(con, tokens, fetch)
                 fuzzy = bool(rows)
 
         finally:
             con.close()
         hits = self._bodies_by_id([str(i) for (i,) in rows])
+        hits = self._collapse_same_title(hits, limit)
         if fuzzy:
             # Measured on the real vault, roughly one in seven of these is not
             # the record the caller meant. Labelling them keeps the agent from
@@ -613,6 +626,43 @@ class SessionLayer(MemoryLayer):
                 h.text = f"[approximate match — spelling differs] {h.text}"
                 h.score = min(getattr(h, "score", 1.0) or 1.0, 0.4)
         return hits
+
+    @staticmethod
+    def _collapse_same_title(hits: list[Hit], limit: int) -> list[Hit]:
+        """One slot per exact title; the survivor names what was folded away.
+
+        Measured on the real store (15,141 observations): 2,246 rows sit in a
+        group of 675 that share their title with another row, and within those
+        groups the median pair shares 89% of its text (p10 82%) -- one fact
+        recorded twice, spending two of the five slots a query gets. The
+        motivating pair (#1589/#1558) shares only 37%: same bug, told twice,
+        so a text-similarity test would have missed it while a title test
+        catches it.
+
+        Folds are announced on the survivor with their ids, never dropped
+        silently: every row stays in the store and reachable by direct query.
+        A blank or near-blank key never folds -- 55 rows in that store carry no
+        title, and merging them would be invention, not dedup.
+        """
+        kept: list[Hit] = []
+        by_key: dict[str, Hit] = {}
+        for h in hits:
+            key = h.meta.get("title_key") or ""
+            lead = by_key.get(key) if key else None
+            if lead is None:
+                if key:
+                    by_key[key] = h
+                kept.append(h)
+            else:
+                lead.meta.setdefault("folded", []).append(h.ref)
+        for h in kept:
+            folded = h.meta.get("folded")
+            if folded:
+                ids = ", ".join(f"#{r}" for r in folded[:3])
+                more = f" +{len(folded) - 3} more" if len(folded) > 3 else ""
+                h.text += (f" [+{len(folded)} same-title: {ids}{more}; "
+                           f"supersedes='#<id>' retires a stale twin]")
+        return kept if limit < 0 else kept[:limit]
 
     # A fragment must be long enough to be evidence rather than noise, and a
     # candidate must contain most of the query's fragments to be offered at all.

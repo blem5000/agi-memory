@@ -255,6 +255,36 @@ with tempfile.TemporaryDirectory() as tmp_dir:
     assert not _l1t.search("qqqzzzwwwvvv", limit=3), "fallback must not match arbitrary input"
     assert _SLt._fragments("abc") == [], "short words yield no fragments"
 
+# Read-path fold: an exact title gets one slot in the results and the fold is
+# announced with the id it hid. Nothing is refused at write time -- every row
+# stays in the store, named on the survivor, so silence is never a lie.
+with tempfile.TemporaryDirectory() as fold_dir:
+    from agi_memory.layers.session_layer import SessionLayer as _SLf
+    _l1f = _SLf(project="fold", db_path=Path(fold_dir) / "fold.db")
+    _twin_a = _l1f.record("The booking screen stays blank when the session cookie expires.",
+                          title="Session Cookie Expiry Bug", project="fold")
+    _twin_b = _l1f.record("The booking screen is empty because the session cookie expired.",
+                          title="Session Cookie Expiry Bug", project="fold")
+    for _i, _t in enumerate(["Session cookie rotation runs before the booking screen renders.",
+                             "Session cookie TTL is 30 minutes in staging.",
+                             "Session cookie names differ per environment."]):
+        _l1f.record(_t, title=f"Cookie Rule {_i}", project="fold")
+    _fold_hits = _l1f.search("session cookie booking screen", limit=4)
+    assert len(_fold_hits) == 4, f"fold must backfill to limit, got {len(_fold_hits)}"
+    _refs = {h.ref for h in _fold_hits}
+    assert len(_refs & {str(_twin_a["id"]), str(_twin_b["id"])}) == 1, \
+        f"same-title twins must share one slot, got {sorted(_refs)}"
+    _folded = str(_twin_a["id"] if str(_twin_b["id"]) in _refs else _twin_b["id"])
+    assert f"same-title: #{_folded}" in " ".join(h.text for h in _fold_hits), \
+        "the folded id must be named on the survivor"
+    with sqlite3.connect(Path(fold_dir) / "fold.db") as _fc:
+        assert _fc.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 5, \
+            "folding must never delete a row"
+    # A row with no title must never fold -- 55 such rows exist in the real store.
+    assert len(_SLf._collapse_same_title(
+        [Hit(text=f"#{i} [p] : body", source="session", ref=str(i), meta={"title_key": ""})
+         for i in (1, 2)], 5)) == 2, "title-less rows must never fold together"
+
 # A hard delete must reach everywhere the memory went. It used to delete only
 # the L1 row, leaving promoted facts in the graph and the record in the
 # append-only vault, from which the next import or sync restored it. For anyone
