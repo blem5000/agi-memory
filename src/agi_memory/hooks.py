@@ -572,11 +572,24 @@ def hook_session_end(project: Optional[str] = None) -> None:
 
 
 def _spawn_detached(args: List[str]) -> None:
-    """Start a process that outlives this one, with no pipes back to it."""
+    """Start a process that outlives this one, with no pipes back to it.
+
+    The child gets a sanitised environment. It used to inherit the parent's
+    verbatim, and the parent is often a hook fired from inside the test suite --
+    which sets AGI_MEMORY_VAULT and AGI_MEMORY_DIR to a temp directory it then
+    deletes. The child outlived the suite still holding those paths, so a sync
+    that named a vault by ambient environment could name a directory that no
+    longer existed. Stripping the AGI_MEMORY_* overrides makes the child fall
+    back to the documented defaults rather than to whatever the parent happened
+    to be pointing at, and AGI_MEMORY_HOOK propagates so a hook reached from
+    inside a hook chain cannot re-enter the suite.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGI_MEMORY_")}
+    env["AGI_MEMORY_HOOK"] = "1"
     flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) \
         if os.name == "nt" else 0
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=os.name != "nt", creationflags=flags)
+                     env=env, start_new_session=os.name != "nt", creationflags=flags)
 
 
 def hook_vault_sync() -> None:
@@ -592,14 +605,37 @@ def hook_vault_sync() -> None:
         pass
 
 
+def _in_hook_chain() -> bool:
+    """True when this process is already inside a hook invocation.
+
+    The unbounded edge this closes: pre-commit runs the suite, the suite commits
+    in a worktree, that commit fires pre-commit, and the suite runs again. One
+    generation completes and the process tree should end, but a hook reached from
+    inside the suite can fan out before that -- 14 concurrent copies of
+    test_offline.py were observed doing exactly this, each rewriting the repo's
+    .git/config on the way past. A hook that is already inside a hook does
+    nothing: the outer invocation is still running and will report the result.
+    """
+    return bool(os.environ.get("AGI_MEMORY_HOOK"))
+
+
 def hook_pre_commit() -> None:
-    """Git pre-commit: Verify test suite and offline invariants."""
+    """Git pre-commit: Verify test suite and offline invariants.
+
+    CI runs this same suite on six platforms across five Python versions, so
+    the hook's only unique value was failing before a push -- and at 40-60s a
+    commit that cost that much got bypassed anyway. It was also the entry point
+    of the recursion above. `hooks.py pre-commit` remains runnable by hand.
+    """
     sys.path.insert(0, str(REPO_DIR))
+    if _in_hook_chain():
+        return
     val_script = Path.cwd() / "hooks" / "validate-offline.sh"
     if not val_script.exists():
         val_script = REPO_DIR.parent.parent / "hooks" / "validate-offline.sh"
     if val_script.exists() and os.access(val_script, os.X_OK):
-        ret = subprocess.call([str(val_script)])
+        env = {**os.environ, "AGI_MEMORY_HOOK": "1"}
+        ret = subprocess.call([str(val_script)], env=env)
         if ret != 0:
             sys.exit(ret)
         return
@@ -1194,7 +1230,15 @@ def uninstall_opencode_plugin(scope: str = "user") -> Tuple[bool, str]:
 
 
 def install_git_hooks(target_dir: Path | None = None, py_path: str = None) -> Tuple[bool, str]:
-    """Install pre-commit, post-commit, and pre-push hooks in .git/hooks/."""
+    """Install the post-commit and pre-push hooks in .git/hooks/.
+
+    No pre-commit hook. It ran the full offline suite on every commit, which
+    cost 40-60s, duplicated what CI already checks on six platforms, and was the
+    entry point of an unbounded recursion: hook -> suite -> a commit in a
+    worktree -> hook. `hooks/validate-offline.sh` is still there to run by hand,
+    and a pre-commit hook already installed by an earlier version is removed
+    rather than left behind.
+    """
     root = target_dir or Path.cwd()
     git_dir = root / ".git"
     if not git_dir.exists():
@@ -1206,10 +1250,6 @@ def install_git_hooks(target_dir: Path | None = None, py_path: str = None) -> Tu
     py = py_path or detect_python()
     hooks_py = REPO_DIR / "hooks.py"
 
-    pre_commit_content = f"""#!/usr/bin/env bash
-# agent-memory pre-commit hook
-"{py}" "{hooks_py}" pre-commit
-"""
     post_commit_content = f"""#!/usr/bin/env bash
 # agent-memory post-commit hook
 "{py}" "{hooks_py}" post-commit &
@@ -1232,7 +1272,15 @@ def install_git_hooks(target_dir: Path | None = None, py_path: str = None) -> Tu
         except Exception:
             pass
 
-    _write_hook("pre-commit", pre_commit_content)
+    # A pre-commit hook from an earlier version is ours if it says so; leaving
+    # it would keep the recursion entry point installed after an "upgrade".
+    stale = hooks_dir / "pre-commit"
+    try:
+        if stale.exists() and "hooks.py" in stale.read_text(encoding="utf-8"):
+            stale.unlink()
+    except OSError:
+        pass
+
     _write_hook("post-commit", post_commit_content)
     _write_hook("pre-push", pre_push_content)
 

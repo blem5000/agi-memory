@@ -1149,7 +1149,11 @@ with tempfile.TemporaryDirectory() as hook_tmp:
         subprocess.run(["git", "init"], cwd=str(h_dir), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         ok, msg = hooks.install_git_hooks(target_dir=h_dir, py_path="/usr/bin/python3")
         assert ok
-        assert (h_dir / ".git" / "hooks" / "pre-commit").exists()
+        # No pre-commit hook. It ran this suite on every commit, cost 40-60s,
+        # duplicated CI across six platforms, and was the entry point of an
+        # unbounded recursion: hook -> suite -> a commit in a worktree -> hook.
+        # See tests/test_hook_safety.py.
+        assert not (h_dir / ".git" / "hooks" / "pre-commit").exists()
         assert (h_dir / ".git" / "hooks" / "post-commit").exists()
         assert (h_dir / ".git" / "hooks" / "pre-push").exists()
 
