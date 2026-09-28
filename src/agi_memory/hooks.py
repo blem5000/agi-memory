@@ -1229,6 +1229,37 @@ def uninstall_opencode_plugin(scope: str = "user") -> Tuple[bool, str]:
     return True, f"Uninstalled OpenCode plugin from {', '.join(removed)}"
 
 
+def git_hook_status(repo_dir: Path | str | None = None) -> Dict[str, Any]:
+    """Which agi-memory git hooks are installed, and what to do about it.
+
+    `doctor` reports this because a pre-commit hook from an earlier version
+    stays in .git/hooks after an upgrade, and nothing about it is visible from
+    the tool otherwise -- the user believes the upgrade removed it, and the
+    suite keeps running on every commit. The remedy is one command, so say so
+    rather than leaving them to find out the slow way.
+    """
+    root = Path(repo_dir or Path.cwd())
+    hooks_dir = root / ".git" / "hooks"
+    out: Dict[str, Any] = {"dir": str(hooks_dir), "installed": [], "stale_pre_commit": False}
+    if not hooks_dir.exists():
+        return out
+    for name in ("post-commit", "pre-push", "pre-commit"):
+        hp = hooks_dir / name
+        if not hp.exists():
+            continue
+        try:
+            body = hp.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "hooks.py" not in body:
+            continue          # not ours
+        if name == "pre-commit":
+            out["stale_pre_commit"] = True
+        else:
+            out["installed"].append(name)
+    return out
+
+
 def install_git_hooks(target_dir: Path | None = None, py_path: str = None) -> Tuple[bool, str]:
     """Install the post-commit and pre-push hooks in .git/hooks/.
 

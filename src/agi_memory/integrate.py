@@ -1601,6 +1601,26 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     for name, cap in (report.get("hooks") or {}).items():
         installed = ", ".join(cap.get("installed") or []) or "none"
         print(f"  {name:<22} {(cap.get('point_of_action') or 'not available'):<26} {installed}")
+    # Git hooks are invisible from the tool otherwise, and a pre-commit left by
+    # an earlier version keeps running the whole suite on every commit.
+    git_hooks: dict = {}
+    try:
+        try:
+            from agi_memory import hooks as _hooks
+        except ImportError:
+            import hooks as _hooks  # type: ignore
+        git_hooks = _hooks.git_hook_status()
+    except Exception:
+        git_hooks = {}
+    if git_hooks:
+        report["git_hooks"] = git_hooks
+        names = ", ".join(git_hooks.get("installed") or []) or "none"
+        print(f"\n  Git hooks:    {names}  (in {git_hooks['dir']})")
+        if git_hooks.get("stale_pre_commit"):
+            print("  [!] A pre-commit hook from an older version is still installed. It runs the")
+            print("      full offline suite on every commit and is no longer installed or")
+            print("      supported. Remove it by re-running 'agi-integrate install', or delete")
+            print("      that file.")
     print()
 
 

@@ -62,7 +62,9 @@ python3 tests/chaos_test.py
 python3 tests/stress_test.py
 ```
 
-## Full pre-commit chain
+## Full verification chain
+
+Run this by hand (or let CI do it) — it is not wired to git automatically since 0.9.9.
 
 ```bash
 python3 tests/test_offline.py \

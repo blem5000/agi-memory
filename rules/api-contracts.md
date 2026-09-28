@@ -204,6 +204,6 @@ Agent memory supports automated execution triggers across coding tools (Claude C
   - `session-start`: Injects active project precedents and pinned Core Memory invariants into the assistant's initial prompt context.
   - `pre-compact`: Curates and promotes high-signal working memory observations into L2 durable triples before context window truncation.
   - `session-end`: Background vault sync with private GitHub repository.
-  - `pre-commit`: Offline test suite verification.
+  - `pre-commit`: Offline test suite verification. Not installed as a git hook since 0.9.9 -- run `hooks/validate-offline.sh` manually, or rely on CI.
   - `post-commit`: Automatically captures meaningful commit summaries and records them into session memory.
 

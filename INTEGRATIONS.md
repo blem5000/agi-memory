@@ -140,14 +140,13 @@ Use `--scope user` to install slash commands and skills globally (`~/.claude/ski
 
 ---
 
-## Lifecycle Hooks Automation (`session-start`, `pre-compact`, `session-end`, `pre-commit`)
+## Lifecycle Hooks Automation (`session-start`, `pre-compact`, `session-end`)
 
 Agent memory automatically triggers lifecycle hooks during coding assistant workflows:
 1. **`session-start` / `PreInvocation`**: Proactively fetches pinned Core Memory blocks and top project precedents, injecting them directly into the assistant's starting context prompt.
    **`user-prompt-submit`** (Claude Code, OpenCode): adds up to 3 memories that closely match the prompt you just sent.
 2. **`pre-compact`**: Scans unpromoted high-signal working memories and clusters them into L2 knowledge graph triples right before context window compaction.
 3. **`session-end` / `Stop`**: Instantly commits vault changes and triggers a background Git push to your private remote.
-4. **`pre-commit`**: Validates offline test suites and memory invariants before code is committed.
 
 ### Automated Setup (Default)
 Hooks are configured automatically when running `install all` or `init`:

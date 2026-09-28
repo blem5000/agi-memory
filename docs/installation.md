@@ -176,7 +176,7 @@ Supported lifecycle triggers:
 - **One row per real session**: Claude Code and OpenCode pass their own session id, so a resume reopens the same session and a prompt, stop or end only ever touches its own session. Antigravity runs its hook before every model invocation and passes no id, so it is installed as `session-start --reuse`, which keeps an active session from the last 12 hours instead of opening one per step.
 - **`pre-compact`**: Promotes working memories into L2 knowledge graph triples before context window compaction.
 - **`session-end` / `Stop`**: Triggers immediate Git sync of the memory vault with your remote repository.
-- **`pre-commit`**: Runs offline test suite checks before git commits.
+- **`pre-commit`**: No longer installed. It ran the full offline suite on every commit (40-60s), duplicated what CI already checks on six platforms, and was the entry point of a hook recursion that corrupted a repository's git config. Run the same checks by hand with `hooks/validate-offline.sh`, or let CI do it. If you upgraded from an earlier version, re-run `agi-integrate install` once to remove the old hook -- `agi-integrate doctor` will tell you if one is still there.
 - **`post-commit`**: Captures git commit summaries and records them into session memory.
 
 ---

@@ -47,7 +47,7 @@
 
 8. **Core Memory & Automated Lifecycle Hooks**:
    - Critical system invariants are stored as pinned Core Memory blocks (`core_memory_blocks`) prepended to recall queries.
-   - Universal lifecycle hooks (`session-start`, `pre-compact`, `session-end`, `pre-commit`) proactively inject context, auto-promote memories before context compression, and sync the vault on session termination.
+   - Universal lifecycle hooks (`session-start`, `pre-compact`, `session-end`, and the manual `pre-commit` check) proactively inject context, auto-promote memories before context compression, and sync the vault on session termination.
 
 9. **Verified Performance SLAs & Production Benchmarks**:
    - Tested and verified against authentic production scale (13,989 observations, 20.61 MB vault):

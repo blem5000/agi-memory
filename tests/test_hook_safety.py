@@ -181,5 +181,43 @@ class InstallTests(unittest.TestCase):
             self.assertTrue(foreign.exists(), "not ours to delete")
 
 
+class DoctorVisibilityTests(unittest.TestCase):
+    """A pre-commit left by an earlier version must be visible in `doctor`.
+
+    Otherwise the user believes the upgrade removed it, and the suite keeps
+    running on every commit with nothing to say so.
+    """
+
+    def test_stale_pre_commit_is_flagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hooks_dir = root / ".git" / "hooks"
+            hooks_dir.mkdir(parents=True)
+            (hooks_dir / "pre-commit").write_text(
+                '#!/usr/bin/env bash\n"py" "/x/hooks.py" pre-commit\n', encoding="utf-8")
+            (hooks_dir / "post-commit").write_text(
+                '#!/usr/bin/env bash\n"py" "/x/hooks.py" post-commit &\n', encoding="utf-8")
+            got = hooks.git_hook_status(root)
+        self.assertTrue(got["stale_pre_commit"])
+        self.assertEqual(["post-commit"], got["installed"])
+
+    def test_a_foreign_pre_commit_is_not_reported_as_ours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hooks_dir = root / ".git" / "hooks"
+            hooks_dir.mkdir(parents=True)
+            (hooks_dir / "pre-commit").write_text("#!/usr/bin/env bash\nnpm test\n",
+                                                  encoding="utf-8")
+            got = hooks.git_hook_status(root)
+        self.assertFalse(got["stale_pre_commit"])
+        self.assertEqual([], got["installed"])
+
+    def test_no_hooks_directory_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            got = hooks.git_hook_status(Path(tmp))
+        self.assertEqual([], got["installed"])
+        self.assertFalse(got["stale_pre_commit"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
