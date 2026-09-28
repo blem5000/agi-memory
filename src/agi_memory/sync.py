@@ -6,6 +6,7 @@ Runs non-blocking background synchronization with periodic deduplication and com
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -25,7 +26,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 
 try:
-    from agi_memory.config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir
+    from agi_memory.config import (DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR,
+                                   assert_vault_isolation, get_vault_dir)
     from agi_memory.layers.session_layer import add_record_listener, remove_record_listener
     from agi_memory.layers.graph_layer import add_edge_listener, remove_edge_listener
     from agi_memory.vault import (
@@ -36,7 +38,8 @@ try:
         init_vault,
     )
 except ImportError:
-    from config import DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR, get_vault_dir
+    from config import (DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR,
+                      assert_vault_isolation, get_vault_dir)
     from layers.session_layer import add_record_listener, remove_record_listener
     from layers.graph_layer import add_edge_listener, remove_edge_listener
     from vault import (
@@ -48,6 +51,14 @@ except ImportError:
     )
 DEDUPE_INTERVAL_SECONDS = 7 * 24 * 3600  # 7 days
 DEDUPE_COUNT_THRESHOLD = 50  # auto-dedupe after 50 new observations
+
+
+def _process_lock(vault_dir: Path):
+    """Cross-process lock around a sync. Advisory: it prevents interleaved
+    writers and nothing else."""
+    from agi_memory import vault_lock
+    return vault_lock.acquire(vault_dir)
+
 
 _sync_lock = threading.Lock()
 _debounce_timer: Optional[threading.Timer] = None
@@ -161,11 +172,97 @@ def _ensure_git_identity(vault_dir: Path) -> None:
 # `union` is a built-in git merge driver, so this needs no external config.
 # It is ONLY safe while the vault stays append-only -- a file whose lines are
 # edited in place would silently keep both versions of an edited line.
-GITATTRIBUTES = "*.jsonl merge=union\n*.json  merge=union\n"
+# Union merge is for append-only records, and only `*.jsonl` are append-only
+# here. It used to cover `*.json` too, which is wrong: union-merging two JSON
+# documents concatenates them into something that is not valid JSON, so
+# `promoted.json` had to be rebuilt by hand after the 0.9.9 merge. A diverged
+# JSON file should stop the merge and say so, which is what a conflict does.
+GITATTRIBUTES = "*.jsonl merge=union\n"
+# Applied to a vault created before the fix, whose .gitattributes still claims
+# JSON files merge by union.
+LEGACY_GITATTRIBUTES = "*.json  merge=union\n*.json merge=union\n"
+
+# Write receipts: one line per git call, appended beside the vault. A sync that
+# resolved onto the wrong repository left a commit on main and deleted 101
+# tracked files, and answering "which process did that" took archaeology. This
+# makes it a query.
+#
+# Deliberately not a permission layer. A receipt records; it never blocks,
+# approves or rewrites. Anything that can deny a write eventually denies a
+# legitimate one.
+RECEIPTS_NAME = "write-receipts.jsonl"
+
+
+def _receipt(v_dir: Path, argv: list, outcome: str) -> None:
+    """Append one write receipt. Never raises: a receipt must not break a sync."""
+    try:
+        import getpass
+        try:
+            who = getpass.getuser()
+        except Exception:
+            who = "unknown"
+        _, top, _ = _run_git(["rev-parse", "--show-toplevel"], cwd=v_dir)
+        rec = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pid": os.getpid(),
+            "user": who,
+            "argv": list(argv)[:8],
+            "repo": (top or "").strip() or str(v_dir),
+            "outcome": outcome,
+        }
+        with open(v_dir / RECEIPTS_NAME, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def read_receipts(vault_dir: Path | str | None = None, limit: int = 20) -> list:
+    """Most recent write receipts, newest last. Read-only."""
+    try:
+        v_dir = init_vault(vault_dir) if vault_dir is None else Path(vault_dir)
+    except Exception:
+        return []
+    path = v_dir / RECEIPTS_NAME
+    if not path.exists():
+        return []
+    out = []
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+    except OSError:
+        return out
+    return out
 
 
 def ensure_merge_attributes(v_dir: Path) -> bool:
-    """Install the union merge policy for vault records. Idempotent."""
+    """Install the union merge policy for vault records. Idempotent.
+
+    Also strips the JSON line from a vault written by an earlier version: that
+    setting silently produced an unparseable file, and a JSON conflict that stops
+    the merge is the behaviour we want.
+    """
+    attrs = v_dir / ".gitattributes"
+    try:
+        existing = attrs.read_text(encoding="utf-8") if attrs.exists() else ""
+        kept = existing
+        for legacy in LEGACY_GITATTRIBUTES.splitlines():
+            kept = kept.replace(legacy + "\n", "").replace(legacy, "")
+        body = kept.strip("\n")
+        if "*.jsonl merge=union" not in body:
+            body = (body + "\n" + GITATTRIBUTES.strip()) if body else GITATTRIBUTES.strip()
+        final = body + "\n"
+        if final == existing:
+            return False
+        attrs.write_text(final, encoding="utf-8")
+        return True
+    except OSError:
+        return False
     attrs = v_dir / ".gitattributes"
     try:
         existing = attrs.read_text(encoding="utf-8") if attrs.exists() else ""
@@ -366,10 +463,28 @@ def sync(
     pull: bool = True,
     force_dedupe: bool = False
 ) -> dict[str, Any]:
-    """Synchronize vault with git remote, executing periodic deduplication and local re-indexing."""
-    with _sync_lock:
-        v_dir = init_vault(vault_dir)
-        git_dir = v_dir / ".git"
+    """Synchronize vault with git remote, executing periodic deduplication and local re-indexing.
+
+    Refuses to run when the resolved directory is not its own git root. Every git
+    operation below trusts that, and the incident was that assumption being false:
+    a sync resolved onto a project's checkout, replaced its origin with the
+    vault's, renamed its branch, and a later rebase recorded 101 of its tracked
+    files as deleted on main. The guard fails closed and names the variable to
+    unset.
+
+    Also takes a cross-process lock. The `threading.Lock` below is invisible
+    between processes, and fourteen concurrent copies of the test suite were
+    observed each believing it held it.
+    """
+    v_dir = init_vault(vault_dir)
+    assert_vault_isolation(v_dir)
+    with contextlib.ExitStack() as _stack:
+        _plock = _stack.enter_context(_process_lock(v_dir))
+        if not _plock.held:
+            return {"status": "locked",
+                    "message": "another process is syncing this vault; skipped"}
+        with _sync_lock:
+            git_dir = v_dir / ".git"
         cfg = load_sync_config()
 
         if not git_dir.exists():
@@ -402,12 +517,14 @@ def sync(
         # Commit local changes
         _ensure_git_identity(v_dir)
         _run_git(["add", "-A"], cwd=v_dir)
+        _receipt(v_dir, ["add", "-A"], "staged")
         _, status_out, _ = _run_git(["status", "--porcelain"], cwd=v_dir)
 
         committed = False
         if status_out:
             c_msg = _generate_sync_commit_message(v_dir, dedupe_stats=dedupe_stats)
             rc, _, _ = _run_git(["commit", "-m", c_msg], cwd=v_dir)
+            _receipt(v_dir, ["commit", c_msg.splitlines()[0][:60]], "ok" if rc == 0 else f"rc={rc}")
             committed = (rc == 0)
 
         pulled = False
@@ -419,12 +536,15 @@ def sync(
             # install it before the first pull that would need it.
             if ensure_merge_attributes(v_dir):
                 _run_git(["add", ".gitattributes"], cwd=v_dir)
+                _receipt(v_dir, ["add", ".gitattributes"], "ok")
                 _run_git(["commit", "-m", "chore: union merge for append-only vault records"],
                          cwd=v_dir)
+                _receipt(v_dir, ["commit", "chore: union merge"], "ok")
 
             # 1. Pull changes with rebase
             if pull:
                 rc_pull, _, err_pull = _run_git(["pull", "--rebase", "origin", "main"], cwd=v_dir, timeout=20)
+                _receipt(v_dir, ["pull", "--rebase"], f"rc={rc_pull}")
                 if rc_pull == 0:
                     pulled = True
                     # Re-import newly pulled records into local SQLite
@@ -442,6 +562,7 @@ def sync(
             # 2. Push changes
             if push:
                 rc_push, _, err_push = _run_git(["push", "origin", "main"], cwd=v_dir, timeout=20)
+                _receipt(v_dir, ["push", "origin", "main"], f"rc={rc_push}")
                 if rc_push == 0:
                     pushed = True
                     sync_status = "synced"
@@ -561,6 +682,8 @@ def main():
     sub.add_parser("now", help="Trigger immediate bidirectional sync")
     sub.add_parser("sync", help=argparse.SUPPRESS)
     sub.add_parser("dedupe", help="Force immediate deduplication and compaction")
+    verify_p = sub.add_parser("verify", help="Show where the vault lives and what wrote to it")
+    verify_p.add_argument("--limit", type=int, default=20)
 
     init_p = sub.add_parser("init", help="Initialize Git sync with remote")
     init_p.add_argument("remote_url", nargs="?", default=None, help="Remote Git repository URL")
@@ -577,9 +700,16 @@ def main():
         print(f"  Remote URL:   {st['remote_url'] or '(none)'}")
         print(f"  Auto-sync:    {'Enabled' if st['auto_sync'] else 'Disabled'}")
         print(f"  Sync Status:  {st['last_sync_status']}")
-        if st["last_sync_epoch"]:
-            t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["last_sync_epoch"]))
-            print(f"  Last Synced:  {t_str}")
+        # Only claim a sync when one could have happened. This used to print a
+        # local commit's timestamp, so a vault that had never left the machine
+        # read as "Last Synced: 20 minutes ago".
+        _remote = st.get("remote_url")
+        if st.get("last_sync_epoch") and _remote:
+            _t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["last_sync_epoch"]))
+            print(f"  Last Synced:  {_t}  (to {_remote})")
+        else:
+            print("  Last Synced:  never — no remote configured, "
+                  "nothing has left this machine")
         print(f"  GitHub CLI:   {'✓ Authenticated (' + st['gh_username'] + ')' if st['gh_authenticated'] else ('Installed (Not logged in)' if st['gh_available'] else 'Not Installed')}\n")
     elif args.subcommand in ("now", "sync"):
         print("Synchronizing agent-memory vault...")
@@ -595,6 +725,40 @@ def main():
         print(f"Graph items:  {d['graph_before']} -> {d['graph_after']} ({d['graph_pruned']} pruned)")
         sync(push=True, pull=False)
         print("Done.")
+    elif args.subcommand == "verify":
+        # "Which process wrote this?" as a query, not as archaeology. Read-only
+        # on purpose: receipts that could block a write would eventually block a
+        # legitimate one.
+        v = get_vault_dir()
+        try:
+            assert_vault_isolation(v)
+            containment = "ok - the vault is its own git root"
+        except RuntimeError as e:
+            containment = f"PROBLEM: {e}"
+        try:
+            from agi_memory import vault_lock
+            lock_state = vault_lock.status(v)
+        except Exception:
+            lock_state = "unknown"
+        print("\nagi-memory vault verification")
+        print(f"  Vault path:   {v}")
+        print(f"  Containment:  {containment}")
+        print(f"  Lock:         {lock_state}")
+        try:
+            from agi_memory.config import load_sync_config
+            cfg = load_sync_config()
+            print(f"  Remote:       {cfg.get('remote_url') or '(none — nothing leaves this machine)'}")
+        except Exception:
+            pass
+        rows = read_receipts(v, limit=args.limit)
+        print(f"\n  Write receipts (last {len(rows)}):")
+        if not rows:
+            print("    (none recorded yet)")
+        for r in rows:
+            print(f"    {r.get('ts')}  pid={r.get('pid')}  {r.get('outcome')}")
+            print(f"      {' '.join(r.get('argv') or [])[:90]}")
+            print(f"      in {r.get('repo')}")
+        print()
     elif args.subcommand == "init":
         if args.create_private:
             ok, msg = setup_gh_repo(repo_name=args.repo_name)

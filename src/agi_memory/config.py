@@ -105,6 +105,77 @@ def get_data_dir() -> Path:
     return target
 
 
+def _env_source(name: str) -> str:
+    """Which of our variables resolved to this path, for an error message.
+
+    A containment failure is only actionable if it names the variable to unset.
+    """
+    for var in ("AGI_MEMORY_DIR", "AGENT_MEMORY_DIR", "AGI_MEMORY_VAULT",
+                "AGENT_MEMORY_VAULT"):
+        val = os.environ.get(var, "").strip()
+        if val and str(val) in str(name):
+            return var
+    return "AGI_MEMORY_DIR/AGI_MEMORY_VAULT"
+
+
+def assert_vault_isolation(v_dir: Path) -> None:
+    """Refuse to sync a directory that is not its own git root. Fails closed.
+
+    This is the guard for the incident that produced a commit on the app repo's
+    main deleting 101 tracked files. The route was not a wrong `cwd` -- every git
+    call passed `cwd=v_dir` -- it was `v_dir` itself resolving to a git
+    repository that was never a vault. From there, `_ensure_remote` removes
+    origin, adds an unrelated one, renames the branch and pushes, and a later
+    `pull --rebase` reconciles against unrelated history. 101 files went with it.
+
+    Checked in both directions, and after resolving symlinks, because the vault
+    must neither be inside another repository nor contain one:
+
+      - vault inside a repo  -> `git rev-parse --show-toplevel` is an ancestor
+      - repo inside a vault  -> the vault has no `.git` of its own but a
+                                descendant does, so `--show-toplevel` fails and
+                                a directory walk finds the foreign one
+
+    A worktree's `.git` is a file, not a directory, so the check cannot assume
+    `.git/` exists -- `--show-toplevel` answers that correctly on its own.
+    """
+    import subprocess
+
+    resolved = Path(v_dir).expanduser()
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        resolved = resolved.absolute()
+    probe = resolved if resolved.is_dir() else resolved.parent
+
+    # 1. Is the vault inside some other repository?
+    try:
+        out = subprocess.run(["git", "-C", str(probe), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        out = None
+    if out is not None and out.returncode == 0 and out.stdout.strip():
+        top = Path(out.stdout.strip()).expanduser().resolve()
+        if top != resolved:
+            raise RuntimeError(
+                f"Refusing to sync: {resolved} is inside the git repository at {top}, "
+                f"so a vault sync would commit into that repository. This is how a "
+                f"sync once deleted 101 tracked files from a project's main branch. "
+                f"Unset {_env_source(str(resolved))} or point it at a directory "
+                f"outside any repository."
+            )
+
+    # 2. Does the vault contain another repository?
+    if resolved.is_dir() and not (resolved / ".git").exists():
+        for child in resolved.glob("*/.git"):
+            raise RuntimeError(
+                f"Refusing to sync: {resolved} contains the git repository "
+                f"{child.parent}. A vault must not wrap a checkout -- a rebase "
+                f"against the vault's remote would delete that checkout's files. "
+                f"Unset {_env_source(str(resolved))} or point it elsewhere."
+            )
+
+
 def get_vault_dir(vault_dir: Path | str | None = None) -> Path:
     """Return active vault directory, respecting AGI_MEMORY_VAULT or AGENT_MEMORY_VAULT or argument."""
     if vault_dir:
