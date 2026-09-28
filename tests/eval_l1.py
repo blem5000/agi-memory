@@ -1,5 +1,13 @@
-"""L1 stress test: 10 technical questions graded for substring match + latency.
-Local retrieval only — zero LLM calls. Runs on an isolated evaluation DB.
+"""L1 stress test: 10 technical questions graded by the RANK of the record
+that carries the answer + latency. Local retrieval only — zero LLM calls.
+Runs on an isolated evaluation DB.
+
+Grading is per-hit, not a concatenated blob: a question counts at cutoff k
+only if every required phrase appears by rank k, so an answer sitting in
+slot 5 shows up as Recall@5 10/10 but Recall@1 lower -- which is the
+difference between "the store has it" and "the caller sees it first".
+The 10-question corpus measures this corpus, so the numbers are regression
+baselines, not quality claims about arbitrary stores.
 """
 import _isolate  # noqa: F401,E402  -- must run before agi_memory resolves any path
 import argparse
@@ -46,6 +54,24 @@ def norm(s):
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
 
+def rank_of(hits, phrases):
+    """Deepest rank (0-based) any required phrase first appears at.
+
+    None when a phrase is in no hit: the question misses entirely and stays
+    out of every cutoff. Each phrase may land in a different hit -- what is
+    graded is how deep the caller must read, not whether the phrases sat in
+    one record.
+    """
+    deepest = 0
+    for p in phrases:
+        want = norm(p)
+        idx = next((i for i, h in enumerate(hits) if want in norm(h.text)), None)
+        if idx is None:
+            return None
+        deepest = max(deepest, idx)
+    return deepest
+
+
 def main():
     parser = argparse.ArgumentParser(description="Evaluate L1 Working Memory retrieval accuracy and latency.")
     parser.add_argument("--db", help="Path to SQLite database (defaults to isolated test DB)")
@@ -64,15 +90,19 @@ def main():
             t = time.perf_counter()
             hits = layers[proj].search(q, limit=5)
             lat = round(time.perf_counter() - t, 4)
-            blob = norm(" ".join(h.text for h in hits))
-            ok = all(norm(e) in blob for e in exp)
-            rows.append({"q": q, "ok": ok, "lat": lat})
-            status = "PASS" if ok else "FAIL"
+            rank = rank_of(hits, exp)
+            rows.append({"q": q, "rank": rank, "lat": lat})
+            status = "PASS" if rank is not None else "FAIL"
             print(f"{status} {lat*1000:6.2f}ms :: {q[:60]}", flush=True)
 
-        acc = sum(r["ok"] for r in rows) / len(rows)
+        found = [r["rank"] for r in rows if r["rank"] is not None]
+        acc = len(found) / len(rows)
         mean_ms = (sum(r["lat"] for r in rows) / len(rows)) * 1000
-        print(f"\nL1 Score: {sum(r['ok'] for r in rows)}/{len(rows)} = {acc:.0%}, mean latency: {mean_ms:.2f}ms")
+        print(f"\nL1 Score: {len(found)}/{len(rows)} = {acc:.0%}, mean latency: {mean_ms:.2f}ms")
+        rec = {k: sum(1 for r in found if r < k) for k in (1, 3, 5)}
+        mrr = sum(1.0 / (r + 1) for r in found) / len(rows)
+        print(f"Rank: Recall@1 {rec[1]}/{len(rows)}, @3 {rec[3]}/{len(rows)}, "
+              f"@5 {rec[5]}/{len(rows)}, MRR {mrr:.3f}")
 
 
 if __name__ == "__main__":

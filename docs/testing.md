@@ -16,6 +16,11 @@ python3 tests/eval_l4.py   # L4 Code Graph: callers/deps/impact vs a
                            #                fixture repo with known edges (25/25)
 ```
 
+`eval_l1.py` grades by the rank of the record carrying the answer — it
+reports Recall@1/@3/@5 and MRR next to the pass count, so an answer that
+only surfaces in slot 5 counts as a rank miss even though the store holds
+the record.
+
 `eval_l3.py` seeds a multi-project session history and asks the questions a
 developer asks between sessions ("what did I do about X"), then checks that
 timelines stay project-scoped and that the recap names the most recent session.
