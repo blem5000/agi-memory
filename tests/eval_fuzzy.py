@@ -101,6 +101,36 @@ PRECISION_PROBES = [
 #   precision must not regress at all. Recall may rise; precision may not fall.
 PRECISION_BUDGET = 1.0
 
+# --- unanswerable probes -----------------------------------------------------
+# Recall with no negative class is gameable: a matcher that returns something
+# for every query scores 100% above while telling the caller nothing. Two
+# classes, because they fail differently.
+
+# No corpus word in common. The store must return NOTHING -- not "something
+# close": an invented answer gets acted on, a miss gets rephrased.
+UNANSWERABLE_NO_OVERLAP = [
+    "quantum refrigerator warranty",
+    "portuguese patent filing deadline",
+    "alpine weather forecast for hiking",
+]
+
+# Shares vocabulary with the corpus, yet no record answers the query -- the
+# shape that filled 25/30 slots with irrelevant records on a 3,000-record
+# store. Construction rule, enforced by test_probe_hygiene(): no single
+# record may hold more than two of the probe's terms. A record matching
+# three terms is a topical match, and bm25 scores topicality, not
+# answerhood -- excluding that case keeps the gate honest rather than
+# tuned. Measured on this fixture: top-1 1.685..2.668 vs answerable floor
+# 3.371. The gate below asserts that separation on this fixture only; it is
+# NOT an abstention threshold -- nothing in the store reads score to decide
+# whether to answer.
+UNANSWERABLE_SHARED = [
+    "redis cluster administration",
+    "jwt billing expiration policy",
+    "kubernetes configuration retry strategy",
+    "authentication kubernetes billing",
+]
+
 CODE_FIXTURE = {
     # Only snake_case is defined. Querying the camelCase spelling must therefore
     # be a real fuzzy lookup, not a hit on a different symbol that happens to exist.
@@ -200,6 +230,27 @@ def test_probe_hygiene() -> list:
                 if shared:
                     leaks.append(f"{category}: {degraded!r} shares a stem with corpus word {shared!r}")
                     break
+    # Unanswerable probes carry their own rules: the no-overlap class must
+    # share no corpus word at all (else it is an answerable query wearing a
+    # costume), and the shared class must spread its terms (else a record
+    # that matches three of them will legitimately outscore answerable
+    # probes and the separation gate would be measuring the fixture, not
+    # the matcher).
+    for q in UNANSWERABLE_NO_OVERLAP:
+        shared = set(re.findall(r"[a-z0-9]+", q.lower())) & corpus_words
+        if shared:
+            leaks.append(f"unanswerable probe {q!r} shares corpus word "
+                         f"{sorted(shared)[0]!r} -- it would not be unanswerable")
+    for q in UNANSWERABLE_SHARED:
+        q_tokens = set(re.findall(r"[a-z0-9]+", q.lower()))
+        for title, body in MEMORIES:
+            rec = set(re.findall(r"[a-z0-9]+", f"{title} {body}".lower()))
+            overlap = q_tokens & rec
+            if len(overlap) > 2:
+                leaks.append(f"unanswerable probe {q!r} puts {len(overlap)} terms in one "
+                             f"record ({title!r}: {sorted(overlap)}) -- bm25 would score "
+                             "it like a topical match")
+                break
     return leaks
 
 
@@ -293,6 +344,40 @@ def main():
         precision = prec_hits / prec_total
         print(f"\nPrecision: {prec_hits}/{prec_total} = {precision:.0%} "
               f"(budget: {PRECISION_BUDGET:.0%}, must not regress)")
+
+        # Unanswerable probes, L1 only: this is the layer whose matcher was
+        # loosened; L2-L4 have their own scoring and own negative cases.
+        print("\nUnanswerable — no record answers; does the store invent one?\n")
+        gate_fail = []
+        for q in UNANSWERABLE_NO_OVERLAP:
+            hits = l1.search(q, limit=5)
+            if hits:
+                gate_fail.append(f"no-overlap {q!r} returned {len(hits)} hits "
+                                 f"(top1 score {hits[0].score:.3f})")
+                print(f"FAIL {q} -> invented answer: {hits[0].text[:60]!r}")
+            else:
+                print(f"  PASS 0 hits :: {q}")
+        ans = []
+        for q, must in PRECISION_PROBES:
+            hits = l1.search(q, limit=5)
+            if hits and must.lower() in hits[0].text.lower():
+                ans.append(hits[0].score)
+        un = []
+        for q in UNANSWERABLE_SHARED:
+            hits = l1.search(q, limit=5)
+            un.append(hits[0].score if hits else 0.0)
+        floor = min(ans) if ans else float("nan")
+        ceiling = max(un)
+        separated = bool(ans) and floor > ceiling
+        print(f"\n  shared-overlap top-1 ceiling {ceiling:.3f} vs answerable "
+              f"floor {floor:.3f} -> {'separated' if separated else 'OVERLAPPED'}")
+        if not separated:
+            gate_fail.append(f"score separation lost: floor {floor:.3f} <= ceiling {ceiling:.3f}")
+        if gate_fail:
+            print("\nUNANSWERABLE GATE FAILURE:")
+            for f in gate_fail:
+                print(f"  - {f}")
+            sys.exit(1)
 
     categories = ["morphological", "typo", "identifier", "abbreviation", "paraphrase"]
     print("\nRecall on degraded queries (exact form verified to hit first)\n")
