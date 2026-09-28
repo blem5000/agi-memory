@@ -27,7 +27,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 try:
     from agi_memory.config import (DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR,
-                                   assert_vault_isolation, get_vault_dir)
+                                   assert_vault_isolation, get_data_dir,
+                                   get_vault_dir)
     from agi_memory.layers.session_layer import add_record_listener, remove_record_listener
     from agi_memory.layers.graph_layer import add_edge_listener, remove_edge_listener
     from agi_memory.vault import (
@@ -39,7 +40,7 @@ try:
     )
 except ImportError:
     from config import (DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR,
-                      assert_vault_isolation, get_vault_dir)
+                      assert_vault_isolation, get_data_dir, get_vault_dir)
     from layers.session_layer import add_record_listener, remove_record_listener
     from layers.graph_layer import add_edge_listener, remove_edge_listener
     from vault import (
@@ -182,22 +183,29 @@ GITATTRIBUTES = "*.jsonl merge=union\n"
 # JSON files merge by union.
 LEGACY_GITATTRIBUTES = "*.json  merge=union\n*.json merge=union\n"
 
-# Write receipts: one line per git call, appended beside the vault. A sync that
-# resolved onto the wrong repository left a commit on main and deleted 101
-# tracked files, and answering "which process did that" took archaeology. This
-# makes it a query.
+# Write receipts: one line per git call. Deliberately kept in the data directory
+# and NOT in the vault. An earlier version wrote them beside the observations,
+# which was wrong twice over: a file that changes on every sync means every sync
+# commits, and appending a receipt after the commit left the working tree dirty,
+# so the next `git pull --rebase` refused to run and two machines stopped
+# converging. Evidence about the vault is not vault content.
 #
-# Deliberately not a permission layer. A receipt records; it never blocks,
+# Also deliberately not a permission layer. A receipt records; it never blocks,
 # approves or rewrites. Anything that can deny a write eventually denies a
 # legitimate one.
 RECEIPTS_NAME = "write-receipts.jsonl"
 
 
+def receipts_path() -> Path:
+    """Where the ledger lives. Outside every git repository, by construction."""
+    return get_data_dir() / RECEIPTS_NAME
+
+
 def _receipt(v_dir: Path, argv: list, outcome: str) -> None:
     """Append one write receipt. Never raises: a receipt must not break a sync."""
     try:
-        import getpass
         try:
+            import getpass
             who = getpass.getuser()
         except Exception:
             who = "unknown"
@@ -210,19 +218,15 @@ def _receipt(v_dir: Path, argv: list, outcome: str) -> None:
             "repo": (top or "").strip() or str(v_dir),
             "outcome": outcome,
         }
-        with open(v_dir / RECEIPTS_NAME, "a", encoding="utf-8") as fh:
+        with open(receipts_path(), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
     except Exception:
         pass
 
 
-def read_receipts(vault_dir: Path | str | None = None, limit: int = 20) -> list:
+def read_receipts(limit: int = 20) -> list:
     """Most recent write receipts, newest last. Read-only."""
-    try:
-        v_dir = init_vault(vault_dir) if vault_dir is None else Path(vault_dir)
-    except Exception:
-        return []
-    path = v_dir / RECEIPTS_NAME
+    path = receipts_path()
     if not path.exists():
         return []
     out = []
@@ -238,8 +242,6 @@ def read_receipts(vault_dir: Path | str | None = None, limit: int = 20) -> list:
     except OSError:
         return out
     return out
-
-
 def ensure_merge_attributes(v_dir: Path) -> bool:
     """Install the union merge policy for vault records. Idempotent.
 
@@ -744,13 +746,14 @@ def main():
         print(f"  Vault path:   {v}")
         print(f"  Containment:  {containment}")
         print(f"  Lock:         {lock_state}")
+        print(f"  Receipts:     {receipts_path()}")
         try:
             from agi_memory.config import load_sync_config
             cfg = load_sync_config()
             print(f"  Remote:       {cfg.get('remote_url') or '(none — nothing leaves this machine)'}")
         except Exception:
             pass
-        rows = read_receipts(v, limit=args.limit)
+        rows = read_receipts(limit=args.limit)
         print(f"\n  Write receipts (last {len(rows)}):")
         if not rows:
             print("    (none recorded yet)")

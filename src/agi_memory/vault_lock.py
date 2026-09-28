@@ -13,6 +13,7 @@ was a good idea.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from contextlib import contextmanager
@@ -28,7 +29,14 @@ try:
 except ImportError:
     msvcrt = None
 
-LOCK_NAME = ".agi-vault.lock"
+# The lock lives in the data directory, NOT in the vault. It was in the vault
+# once, and `git add -A` committed it: a file created and deleted by every sync
+# both dirties the working tree -- so the next `git pull --rebase` refuses to
+# run -- and puts a lock file in the user's synced vault.
+#
+# The name is derived from the resolved vault path, so two vaults do not contend
+# with each other while the same vault is still serialised across processes.
+LOCK_PREFIX = ".agi-vault-"
 # A crashed holder must not wedge the vault forever. Generous, because a real
 # sync is seconds; long enough that a slow push is never stolen from.
 STALE_SECONDS = 300
@@ -36,6 +44,17 @@ POLL_SECONDS = 0.25
 # How long a writer waits before reporting "locked" and skipping. A sync holds
 # this for seconds, so a longer wait only delays the message saying so.
 DEFAULT_TIMEOUT = 30.0
+
+
+def lock_path(vault_dir: Path | str) -> Path:
+    """Where the lock for this vault lives. Never inside a git repository."""
+    from agi_memory.config import get_data_dir
+    try:
+        resolved = str(Path(vault_dir).expanduser().resolve())
+    except OSError:
+        resolved = str(vault_dir)
+    tag = hashlib.sha256(resolved.encode("utf-8", "replace")).hexdigest()[:16]
+    return get_data_dir() / f"{LOCK_PREFIX}{tag}.lock"
 
 
 class _Lock:
@@ -105,7 +124,7 @@ def acquire(vault_dir: Path | str, timeout: float = DEFAULT_TIMEOUT) -> Iterator
     means. A sync skips rather than blocks, because a second concurrent sync has
     nothing to add.
     """
-    lock = _Lock(Path(vault_dir) / LOCK_NAME)
+    lock = _Lock(lock_path(vault_dir))
     got = lock.acquire(timeout)
     try:
         yield lock
@@ -115,10 +134,10 @@ def acquire(vault_dir: Path | str, timeout: float = DEFAULT_TIMEOUT) -> Iterator
 
 
 def status(vault_dir: Path | str | None = None) -> str:
-    """Human-readable lock state, for `doctor`."""
+    """Human-readable lock state, for `verify` and `doctor`."""
     from agi_memory.config import get_vault_dir
     try:
-        path = Path(vault_dir or get_vault_dir()) / LOCK_NAME
+        path = lock_path(vault_dir or get_vault_dir())
     except Exception:
         return "unknown"
     if not path.exists():

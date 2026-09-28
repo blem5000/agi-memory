@@ -13,8 +13,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -111,9 +113,73 @@ class ContainmentTests(unittest.TestCase):
             self.assertIn("rules.md", names)
 
 
+class ReceiptTests(unittest.TestCase):
+    """The ledger must not live in the vault.
+
+    It did, once. Two consequences, both found by the two-machine test rather
+    than by inspection: a file rewritten on every sync means every sync commits,
+    and a receipt appended after the commit leaves the working tree dirty, so the
+    next `git pull --rebase` refuses and two machines stop converging.
+    """
+
+    def test_receipts_are_written_outside_the_vault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data, vault = root / "data", root / "vault"
+            vault.mkdir()
+            _init_repo(vault)
+            env = {**os.environ, "AGI_MEMORY_DIR": str(data), "AGI_MEMORY_VAULT": str(vault)}
+            code = ("import sys; sys.path.insert(0, %r)\n"
+                    "from agi_memory import sync\n"
+                    "from pathlib import Path\n"
+                    "v = Path(%r)\n"
+                    "sync._receipt(v, ['add', '-A'], 'staged')\n"
+                    "print(sorted(p.name for p in v.iterdir()))\n"
+                    "print(sync.receipts_path())\n" % (str(REPO / "src"), str(vault)))
+            out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                                 text=True, timeout=60, env=env)
+            self.assertEqual(0, out.returncode, out.stderr)
+            lines = out.stdout.strip().splitlines()
+            self.assertNotIn("write-receipts.jsonl", lines[0],
+                             "the receipt file was written into the vault")
+            self.assertTrue(lines[1].endswith("write-receipts.jsonl"))
+            self.assertTrue(str(vault) not in lines[1],
+                            "the ledger must be outside every git repository")
+
+    def test_a_sync_leaves_the_vault_working_tree_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vault = root / "vault"
+            _init_repo(vault)
+            (vault / "observations.jsonl").write_text('{"id": 1, "text": "a"}\n', encoding="utf-8")
+            _git("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A", cwd=vault)
+            _git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed", cwd=vault)
+            env = {**os.environ, "AGI_MEMORY_DIR": str(root / "data"),
+                   "AGI_MEMORY_VAULT": str(vault)}
+            code = ("import sys; sys.path.insert(0, %r)\n"
+                    "from agi_memory import sync\n"
+                    "print(sync.sync(push=False, pull=False)['status'])\n" % str(REPO / "src"))
+            out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                                 text=True, timeout=180, env=env)
+            self.assertEqual(0, out.returncode, out.stderr)
+            # A dirty tree is what made `pull --rebase` refuse on the next run.
+            status = _git("status", "--porcelain", cwd=vault).stdout.strip()
+            self.assertEqual("", status,
+                             f"sync left the vault dirty, so the next rebase would fail: {status}")
+
+
 class ProcessLockTests(unittest.TestCase):
     """The lock must exclude a *separate process*, which is the case that
     mattered: fourteen copies of the suite each held a `threading.Lock`."""
+
+    def setUp(self):
+        # The lock now lives in the data directory, so every test points that at
+        # its own temp dir rather than at the developer's real one.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._env = patch.dict(os.environ, {"AGI_MEMORY_DIR": self._tmp.name})
+        self._env.start()
+        self.addCleanup(self._env.stop)
 
     def _try_acquire_in_child(self, vault: Path) -> bool:
         """Run a real second process and report whether it got the lock."""
@@ -124,7 +190,8 @@ class ProcessLockTests(unittest.TestCase):
             "    print('GOT' if lk.held else 'BUSY')\n" % (str(REPO / "src"), str(vault))
         )
         out = subprocess.run([sys.executable, "-c", code],
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, timeout=60,
+                             env={**os.environ})
         return "GOT" in out.stdout
 
     def test_a_second_process_is_refused_while_held(self):
@@ -149,15 +216,37 @@ class ProcessLockTests(unittest.TestCase):
             self.assertTrue(self._try_acquire_in_child(vault),
                             "lock was not released -- later syncs would all skip")
 
+    def test_two_different_vaults_do_not_contend(self):
+        from agi_memory import vault_lock
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / "a", Path(tmp) / "b"
+            a.mkdir()
+            b.mkdir()
+            with vault_lock.acquire(a) as held_a:
+                self.assertTrue(held_a.held)
+                with vault_lock.acquire(b, timeout=2) as held_b:
+                    self.assertTrue(held_b.held,
+                                    "one vault's lock blocked an unrelated vault")
+
+    def test_the_lock_is_never_inside_a_git_repository(self):
+        from agi_memory import vault_lock
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / "vault"
+            _init_repo(vault)
+            with vault_lock.acquire(vault) as held:
+                self.assertTrue(held.held)
+                self.assertNotIn(vault.resolve(), held.path.resolve().parents,
+                                 "the lock file is inside the vault and git will commit it")
+                self.assertFalse((vault / ".agi-vault.lock").exists())
+
     def test_a_stale_lock_from_a_dead_process_is_reclaimed(self):
         from agi_memory import vault_lock
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / "vault"
             vault.mkdir()
-            stale = vault / vault_lock.LOCK_NAME
+            stale = vault_lock.lock_path(vault)
             stale.write_text("999999")     # as if a process died holding it
-            import time as _t
-            old = _t.time() - vault_lock.STALE_SECONDS - 60
+            old = time.time() - vault_lock.STALE_SECONDS - 60
             os.utime(stale, (old, old))
             with vault_lock.acquire(vault) as held:
                 self.assertTrue(held.held, "a stale lock wedged the vault forever")
