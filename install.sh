@@ -9,6 +9,13 @@
 
 set -e
 
+# The release this installer fetches. It is the same tag the Homebrew formula
+# pins and the same version PyPI serves, and test_offline.py's parity check
+# fails when it drifts from pyproject.toml -- otherwise a `curl | bash` would run
+# unreleased code from the tip of main while every other install method
+# installed a checksummed tag.
+VERSION="0.10.0"
+
 BOLD="\033[1m"
 GREEN="\033[0;32m"
 BLUE="\033[0;34m"
@@ -65,12 +72,13 @@ else
     echo -e "\n${BOLD}[2/6] Setting up source repository at:${NC} $TARGET_SRC"
     mkdir -p "$INSTALL_ROOT"
     if [ -d "$TARGET_SRC/.git" ]; then
-        echo "  Updating existing installation via git pull..."
-        (cd "$TARGET_SRC" && git pull --quiet origin main 2>/dev/null || true)
+        echo "  Updating existing installation to v${VERSION}..."
+        (cd "$TARGET_SRC" && git fetch --tags --quiet && git -c advice.detachedHead=false checkout --quiet "v${VERSION}" 2>/dev/null) \
+            || { rm -rf "$TARGET_SRC"; git -c advice.detachedHead=false clone --branch "v${VERSION}" --depth 1 https://github.com/kdbhalala/agi-memory.git "$TARGET_SRC" --quiet; }
     else
-        echo "  Cloning agi-memory repository..."
+        echo "  Cloning agi-memory v${VERSION}..."
         rm -rf "$TARGET_SRC"
-        git clone --depth 1 https://github.com/kdbhalala/agi-memory.git "$TARGET_SRC" --quiet
+        git -c advice.detachedHead=false clone --branch "v${VERSION}" --depth 1 https://github.com/kdbhalala/agi-memory.git "$TARGET_SRC" --quiet
     fi
 fi
 

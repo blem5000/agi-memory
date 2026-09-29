@@ -2203,6 +2203,26 @@ with tempfile.TemporaryDirectory() as doc_tmp:
     agents_md = (repo_root / "AGENTS.md").read_bytes()
     assert claude_md == agents_md, "CLAUDE.md and AGENTS.md must be 100% byte-for-byte identical!"
 
+    # 15b. install.sh must pin the release it fetches, and to the same one.
+    # It was `git clone --depth 1` of the default branch, so `curl | bash` ran
+    # unreleased code from the tip of main while brew installed a checksummed
+    # tag and pipx installed a versioned wheel. Nothing failed; the asymmetry
+    # was simply invisible until the two produced different code.
+    _sh = (repo_root / "install.sh").read_text(encoding="utf-8")
+    _m = re.search(r'^VERSION="([^"]+)"', _sh, re.M)
+    assert _m, "install.sh declares no VERSION, so it cannot pin what it clones"
+    _pyp = re.search(r'^version\s*=\s*"([^"]+)"',
+                     (repo_root / "pyproject.toml").read_text(encoding="utf-8"), re.M)
+    assert _m.group(1) == _pyp.group(1), (
+        f"install.sh pins v{_m.group(1)} but the project is {_pyp.group(1)}; "
+        "curl|bash would install a different release than pipx and brew")
+    _rb = (repo_root / "Formula" / "agi-memory.rb").read_text(encoding="utf-8")
+    assert f"tags/v{_m.group(1)}.tar.gz" in _rb, \
+        "the formula and install.sh pin different tags"
+    # A re-run must be idempotent, not a silent upgrade to whatever main is now.
+    assert "git pull" not in _sh, \
+        "install.sh pulls main on re-run; it must check out the pinned tag"
+
     # Every tool must be classified as read-only, additive or destructive, so a
     # caller gating destructive operations reads it off tools/list instead of
     # hardcoding our tool names and going stale the next time one is added.
