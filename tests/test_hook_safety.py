@@ -11,6 +11,7 @@ it is red before the fix and green after -- from inside the repository, where
 git can actually walk up and find it, rather than from a temp directory where
 git already fails either way and the assertion proves nothing.
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -179,6 +180,83 @@ class InstallTests(unittest.TestCase):
             foreign.write_text("#!/usr/bin/env bash\nnpm test\n")
             hooks.install_git_hooks(target_dir=root, py_path="/usr/bin/python3")
             self.assertTrue(foreign.exists(), "not ours to delete")
+
+
+class InstallConsentTests(unittest.TestCase):
+    """A machine-wide install must not write hooks into the repo you are standing in.
+
+    The defect: `cmd_install` called `hooks.install_git_hooks(py_path=...)` with no
+    `target_dir`, so `install_git_hooks` fell back to `Path.cwd()`. Git hooks are
+    per-repository and that command is per-machine, so anyone who ran
+    `agi-integrate install all` while inside a repo they were only visiting --
+    which is what a first-time evaluator does -- left a post-commit and a
+    pre-push hook behind in a .git/ they never named, running on every future
+    commit and push.
+
+    Written so it is red before the fix: `install_git_hooks` is real here, only
+    the assistant-config writers are stubbed, and the tool selected is one whose
+    name matches none of the hook branches, so the git call is the only write
+    under test.
+    """
+
+    def _run_install(self, root, scope="user", yes=False, isatty=False, answer=""):
+        from agi_memory import integrate
+        args = argparse.Namespace(tools=["windsurf"], server="/x/server.py", scope=scope,
+                                  yes=yes, force=False, python="/usr/bin/python3")
+        tool = mock.Mock(display_name="Windsurf", name="windsurf")
+        tool.install = mock.Mock(return_value=(True, "ok"))
+        with mock.patch.object(integrate, "INTEGRATION_MAP", {"windsurf": tool}), \
+             mock.patch.object(sys.stdin, "isatty", return_value=isatty), \
+             mock.patch("builtins.input", return_value=answer), \
+             mock.patch.object(integrate, "detect_python", return_value="/usr/bin/python3"), \
+             mock.patch.object(integrate, "detect_server", return_value="/x/server.py"), \
+             mock.patch("agi_memory.init_command.install_init_command", return_value={}), \
+             mock.patch.object(hooks, "export_snapshot", return_value=""), \
+             mock.patch.object(integrate, "offer_history_import", return_value=None), \
+             mock.patch.object(integrate, "setup_sync_interactive", return_value=None), \
+             mock.patch.object(integrate, "setup_bootstrap_interactive", return_value=None):
+            cwd = os.getcwd()
+            os.chdir(root)
+            try:
+                integrate.cmd_install(args)
+            finally:
+                os.chdir(cwd)
+        return sorted(p.name for p in (root / ".git" / "hooks").iterdir())
+
+    def test_a_user_scoped_install_leaves_a_foreign_repo_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+            before = self._run_install(root)
+            self.assertNotIn("post-commit", before,
+                             "a machine-wide install wrote into a repo it was not asked about")
+            self.assertNotIn("pre-push", before)
+
+    def test_a_declined_prompt_still_leaves_the_repo_untouched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+            names = self._run_install(root, isatty=True, answer="n")
+            self.assertNotIn("post-commit", names)
+            self.assertNotIn("pre-push", names)
+
+    def test_consent_actually_installs_into_the_named_repo(self):
+        # The control. Without it the two tests above could pass because the
+        # install call was deleted rather than gated.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+            names = self._run_install(root, isatty=True, answer="y")
+            self.assertIn("post-commit", names)
+            self.assertIn("pre-push", names)
+
+    def test_project_scope_installs_without_asking(self):
+        # A project-scoped install is the user pointing at this repo on purpose.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+            names = self._run_install(root, scope="project")
+            self.assertIn("post-commit", names)
 
 
 class DoctorVisibilityTests(unittest.TestCase):

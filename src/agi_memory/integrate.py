@@ -1221,7 +1221,29 @@ def cmd_install(args: argparse.Namespace) -> None:
             elif tool.name == "opencode":
                 ok, msg = hooks.install_opencode_plugin(scope=scope, py_path=py_path)
                 print(f"  [{'✓' if ok else '!'}] OpenCode plugin: {msg}")
-        git_res = hooks.install_git_hooks(py_path=py_path)
+        # Git hooks are per-repository; this command is per-machine. It used to
+        # install them unconditionally into Path.cwd(), so anyone who ran
+        # `agi-integrate install all` while standing in a repo they were only
+        # visiting -- which is exactly what a first-time evaluator does -- left
+        # a post-commit and a pre-push hook behind in a .git/ they never named.
+        # A project-scoped install is the user pointing at this repo on
+        # purpose, so that one still installs without asking. A user-scoped one
+        # has to say yes, to a named directory, or nothing is written.
+        if scope == "project":
+            git_res = hooks.install_git_hooks(target_dir=Path.cwd(), py_path=py_path)
+        else:
+            git_res = (False, "skipped")
+            target = Path.cwd()
+            if getattr(args, "yes", False):
+                git_res = hooks.install_git_hooks(target_dir=target, py_path=py_path)
+            elif sys.stdin.isatty():
+                try:
+                    ans = input(f"  Install git hooks into {target}? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    ans = ""
+                if ans in ("y", "yes"):
+                    git_res = hooks.install_git_hooks(target_dir=target, py_path=py_path)
         if git_res[0]:
             print(f"  [✓] Git hooks: {git_res[1]}")
             # Say what was just done to the repository. It persists after this
@@ -1232,6 +1254,11 @@ def cmd_install(args: argparse.Namespace) -> None:
             print("         pre-push     closes the session and syncs the memory vault")
             print("       They run on every commit and push from now on. Remove with:")
             print("         agi-integrate uninstall")
+        else:
+            print("  [-] Git hooks: not installed. They record a commit summary into memory")
+            print("       and sync the vault, and they run on every commit and push from now")
+            print("       on. Install them per repository when you want them:")
+            print(f"         cd <your repo> && agi-integrate hooks git")
     except Exception as e:
         print(f"  [!] Hook setup skipped: {e}")
 
