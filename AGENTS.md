@@ -9,7 +9,7 @@ When operating in this codebase:
 1. Call `memory_recall(query, project="agi-memory")` to check past decisions and bugfixes before modifying code.
 2. Call `memory_recall_deep(query, project="agi-memory")` when architectural or cross-project context is needed.
 3. Call `memory_timeline(project="agi-memory")` to check what was accomplished in prior sessions and review touched files.
-4. Call `code_callers(symbol)` and `code_impact(target)` before refactoring or deleting symbols to inspect blast radius.
+4. Call `code_callers(symbol)` and `code_impact(target)` before refactoring or deleting symbols to inspect blast radius. Treat a result as a first pass, not proof: Python is parsed with `ast`, the other languages with a line scanner, so a missed edge reads exactly like a real absence. Confirm a "no callers" answer against the file before deleting.
 5. Call `code_structure(path)` to inspect class and function hierarchies in modules.
 6. Call `memory_record(text, title, project="agi-memory", category="...", supersedes="...", rationale="...", origin="...", relations=[...])` when establishing conventions or resolving non-trivial issues. Pass `rationale` -- a conclusion without its reasoning cannot be re-examined when the constraints change. Pass `origin="user-confirmed"` only when the user actually said or approved it; anything you concluded yourself is `agent-inferred`, however confident.
 7. Pin non-negotiable invariants using `memory_pin(key, content, category="architecture", project="agi-memory")`.

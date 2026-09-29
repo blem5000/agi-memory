@@ -18,7 +18,7 @@ Before refactoring, renaming, or deleting functions, methods, or classes:
 - Call `code_structure(path)` to view class and function hierarchies in modules.
 - Call `code_callers(symbol)` to discover all inbound callers.
 - Call `code_dependencies(symbol)` to discover all outbound dependencies.
-- Call `code_impact(target)` to evaluate the upstream blast radius and affected files before making destructive changes.
+- Call `code_impact(target)` to evaluate the upstream blast radius and affected files before making destructive changes. A first pass, not proof: Python is parsed with `ast`, other languages with a line scanner, so a missed edge reads exactly like a real absence. Confirm a "no callers" answer against the file before deleting.
 
 ### 4. Record Verified Decisions (In-Flight Curation)
 When settling an architectural pattern, fixing a non-trivial bug, or establishing a convention:

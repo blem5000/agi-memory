@@ -55,6 +55,15 @@ Besides notes and decisions, it also keeps a short history of past sessions and
 an index of your code (functions and who calls them), so an assistant can ask
 "what calls this?" before changing it.
 
+**Read the code index as a fast first pass, not as an LSP.** Python is parsed
+with `ast`; JavaScript, TypeScript, Go, Rust and Dart are read with a
+per-language line scanner. It is fast because it is shallow, and the
+consequences are concrete: a symbol inside a string literal, a line commented
+out mid-file, or a call inside a nested closure can be missed or attributed to
+the wrong enclosing function. A missed edge reads as "no callers" — the same
+answer a real absence gives. Before a delete, confirm against the file or your
+editor's own symbol search. It covers ten extensions across six languages.
+
 ## What it won't do
 
 Search is by keyword, not meaning. If you saved "authentication" and later ask
@@ -62,12 +71,42 @@ about "login", it can miss. It helps to use the words you'd search for when
 saving something. The measured hit rates, including the misses, are in
 [Testing & Evals](docs/testing.md).
 
+## Try it without installing anything into your repos
+
+Every command here only reads. Nothing is written to any repository, no
+assistant is reconfigured, and no hook is installed.
+
+```bash
+pipx install agi-memory
+agi-memory history-import --limit 20     # index the sessions already on this machine
+agi-memory stats                         # what it knows, right now
+agi-recall "webhook retry"               # search it
+```
+
+`stats` prints a count on any machine, so this cannot come back empty and
+leave you thinking it is broken. If the numbers look useful, the next section
+wires it into your assistants.
+
 ## Install
 
 ```bash
 pipx install agi-memory            # or: brew tap kdbhalala/agi-memory https://github.com/kdbhalala/agi-memory && brew install agi-memory
 agi-integrate install all          # connect every assistant it finds on your machine
 agi-integrate status               # see what got connected
+```
+
+`install all` configures the assistants on this machine. It does **not** write
+git hooks into whatever directory you happen to be standing in — it asks
+first, and names the repository it is about to write to:
+
+```
+  Install git hooks into /Users/you/some-repo? [y/N]:
+```
+
+Hooks are per-repository, so install them where you want them:
+
+```bash
+cd your-repo && agi-integrate hooks git
 ```
 
 ## Day-1: import your session history
