@@ -77,7 +77,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -uo pipefail
           git rebase --abort || true
-          gh issue create \
+          # Issues may be disabled on the fork; `gh issue create` would then fail
+          # with its own exit 1 and bury the real rebase failure. Skip cleanly
+          # instead -- the job is already red from the rebase step, and the
+          # failure notifier reports it.
+          ISSUES_ENABLED="$(gh repo view "$GITHUB_REPOSITORY" --json hasIssuesEnabled --jq '.hasIssuesEnabled' 2>/dev/null || echo false)"
+          if [ "$ISSUES_ENABLED" != "true" ]; then
+            echo "::notice::Issues are disabled on $GITHUB_REPOSITORY; skipping issue creation. See the failed run above."
+            exit 0
+          fi
+          gh issue create -R "$GITHUB_REPOSITORY" \
             --title "fork-sync: rebase onto upstream/main needs manual resolution ($(date -u +%F))" \
             --body "Nightly rebase failed (conflict or red tests). Fetch upstream, rebase locally, resolve, push. Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
