@@ -50,14 +50,16 @@ jobs:
             echo "wf_name=${{ github.event.workflow_run.name }}"
             echo "branch=${{ github.event.workflow_run.head_branch }}"
           } >> "$GITHUB_OUTPUT"
-          gh run view "$RUN_ID" --json jobs \
+          # -R: this job has no actions/checkout, so gh cannot infer the
+          # repo from the working directory and fails with "not a git repository".
+          gh run view "$RUN_ID" -R "${{ github.repository }}" --json jobs \
             --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")' \
             > failed_jobs.txt
           echo "failed<<EOF" >> "$GITHUB_OUTPUT"
           cat failed_jobs.txt >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           # Trimmed tail of the failed steps' logs (Telegram caps at 4096 chars).
-          gh run view "$RUN_ID" --log-failed 2>/dev/null | tail -c 2000 > log_tail.txt \
+          gh run view "$RUN_ID" -R "${{ github.repository }}" --log-failed 2>/dev/null | tail -c 2000 > log_tail.txt \
             || echo "(no failed-step logs available)" > log_tail.txt
           echo "log<<EOF" >> "$GITHUB_OUTPUT"
           cat log_tail.txt >> "$GITHUB_OUTPUT"

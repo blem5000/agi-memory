@@ -11,7 +11,8 @@ name: Fork Sync (rebase onto upstream)
 # - Fork feature commits must NOT touch `version` in pyproject.toml.
 #   Only bump it in a fork release commit, to a number ABOVE upstream's.
 #   (A same-line version bump upstream trips the rebase into a conflict
-#   on purpose: version ordering is a human decision, so it opens an issue.)
+#   on purpose: version ordering is a human decision, so it fails the job
+#   loudly and pings the failure notifier.)
 # - Never fetch upstream tags here: fork tags (v0.8.0, ...) intentionally
 #   differ from upstream's same-named tags and would clobber each other.
 # - Pushes made with GITHUB_TOKEN do not retrigger workflows, so CI will
@@ -73,7 +74,12 @@ jobs:
         run: git push --force-with-lease origin HEAD:main
 
       - name: Open issue on conflict
+        # Fork note: Issues are disabled on blem5000/agi-memory, so `gh issue
+        # create` would always fail. Keep the abort+attempt as a best-effort
+        # breadcrumb and make it non-fatal: the Telegram notifier
+        # (notify-telegram.yml) is the real failure channel.
         if: failure()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
