@@ -92,16 +92,6 @@ Use the `agi-memory` MCP server tools before making assumptions:
 """
 
 
-try:
-    from agi_memory.config import hidden_subprocess_kwargs
-except ImportError:
-    try:
-        from config import hidden_subprocess_kwargs
-    except ImportError:
-        def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:
-            return {}
-
-
 def _candidate_runs(path: str) -> bool:
     """True when the candidate interpreter actually executes.
 
