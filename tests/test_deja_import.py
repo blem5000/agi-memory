@@ -11,6 +11,15 @@ if str(_SRC) not in sys.path:
 
 from agi_memory import deja_import as di
 
+# The victory print below uses [✓]; on a cp1252 console that raises
+# UnicodeEncodeError and masks a green run, so force UTF-8 like the CLI does.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # No deja binary on a clean machine: every test below runs against fake
 # runners, so pin the lookup to a dummy path for the whole file.
 di.find_deja_bin = lambda explicit=None: "/fake/deja"

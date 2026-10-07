@@ -217,6 +217,12 @@ def import_sessions(limit: int = 50, project: str | None = None,
 
 
 def main(argv: list[str] | None = None) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     p = argparse.ArgumentParser(prog="agi-memory deja-import",
                                 description="Import deja session digests into L1")
     p.add_argument("--limit", type=int, default=50)
