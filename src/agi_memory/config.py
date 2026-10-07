@@ -152,7 +152,8 @@ def assert_vault_isolation(v_dir: Path) -> None:
     # 1. Is the vault inside some other repository?
     try:
         out = subprocess.run(["git", "-C", str(probe), "rev-parse", "--show-toplevel"],
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, timeout=10,
+                             **hidden_subprocess_kwargs())
     except (OSError, subprocess.SubprocessError):
         out = None
     if out is not None and out.returncode == 0 and out.stdout.strip():

@@ -128,9 +128,11 @@ def _detect_git_range(before: Optional[str], cwd: Path | str | None = None) -> T
     root = str(Path(cwd) if cwd else Path.cwd())
     try:
         log = subprocess.check_output(["git", "log", "--format=%h%x1f%s", f"{before}..HEAD"],
-                                      cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+                                      cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3,
+                                      **hidden_subprocess_kwargs())
         names = subprocess.check_output(["git", "diff", "--name-only", f"{before}..HEAD"],
-                                        cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+                                        cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3,
+                                        **hidden_subprocess_kwargs())
     except Exception:
         return [], []  # not a repo, or `before` is gone after a history rewrite
     commits = [tuple(line.split("\x1f", 1)) for line in log.splitlines() if "\x1f" in line]

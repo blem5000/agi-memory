@@ -33,6 +33,15 @@ except ImportError:
     except ImportError:
         from .layers.session_layer import SessionLayer
 
+try:
+    from agi_memory.config import hidden_subprocess_kwargs
+except ImportError:
+    try:
+        from config import hidden_subprocess_kwargs  # type: ignore[no-redef]
+    except ImportError:
+        def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:  # type: ignore[misc]
+            return {}
+
 # honey: O(n) ctx subprocess per session; fine under ~200 imports, batch or cache if grown.
 CTX_CHAR_CAP = 2000
 
@@ -76,7 +85,8 @@ def _parse_first_json(raw: str) -> dict:
 
 
 def _run(bin_path: str, args: List[str], timeout: int = 60) -> str:
-    res = subprocess.run([bin_path] + args, capture_output=True, text=True, timeout=timeout)
+    res = subprocess.run([bin_path] + args, capture_output=True, text=True, timeout=timeout,
+                         **hidden_subprocess_kwargs())
     return (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
 
 
