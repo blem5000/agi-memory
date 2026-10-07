@@ -299,9 +299,12 @@ with tempfile.TemporaryDirectory() as fold_dir:
     _folded = str(_twin_a["id"] if str(_twin_b["id"]) in _refs else _twin_b["id"])
     assert f"same-title: #{_folded}" in " ".join(h.text for h in _fold_hits), \
         "the folded id must be named on the survivor"
-    with sqlite3.connect(Path(fold_dir) / "fold.db") as _fc:
-        assert _fc.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 5, \
-            "folding must never delete a row"
+    # sqlite3.Connection as a context manager only commits -- it never closes,
+    # so on Windows the open handle blocks TemporaryDirectory cleanup.
+    _fc = sqlite3.connect(Path(fold_dir) / "fold.db")
+    assert _fc.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 5, \
+        "folding must never delete a row"
+    _fc.close()
     # A row with no title must never fold -- 55 such rows exist in the real store.
     assert len(_SLf._collapse_same_title(
         [Hit(text=f"#{i} [p] : body", source="session", ref=str(i), meta={"title_key": ""})
@@ -2239,9 +2242,9 @@ with tempfile.TemporaryDirectory() as doc_tmp:
             f"{_ro} is a read; gating it would slow every lookup down"
 
 
-    # 15b. Tool parity: all 18 MCP tools registered in mcp_server must be documented
+    # 15b. Tool parity: all 19 MCP tools registered in mcp_server must be documented
     registered_tools = {t["name"] for t in mcp_server.TOOLS}
-    assert len(registered_tools) == 18, f"Expected 18 tools in mcp_server, found {len(registered_tools)}"
+    assert len(registered_tools) == 19, f"Expected 19 tools in mcp_server, found {len(registered_tools)}"
 
     # README is an index; the reference lives under docs/, so parity is checked
     # against the whole published doc set rather than one file.

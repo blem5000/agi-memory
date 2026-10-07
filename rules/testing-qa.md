@@ -65,9 +65,10 @@ Before committing or pushing any code changes, all 8 test suites must pass:
    ```bash
    agi-integrate test
    ```
-   Verifies JSON-RPC 2.0 stdio communication, `initialize`, `ping`, and registration of all 18 tools:
+   Verifies JSON-RPC 2.0 stdio communication, `initialize`, `ping`, and registration of all 19 tools:
    - `memory_recall`
    - `memory_recall_deep`
+   - `memory_semantic_index`
    - `memory_record`
    - `memory_promote`
    - `memory_sync`
@@ -77,6 +78,8 @@ Before committing or pushing any code changes, all 8 test suites must pass:
    - `memory_bootstrap`
    - `memory_timeline`
    - `memory_session_outcome`
+   - `memory_wip`
+   - `memory_friction`
    - `code_structure`
    - `code_callers`
    - `code_dependencies`
