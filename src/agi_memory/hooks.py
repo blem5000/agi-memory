@@ -631,10 +631,19 @@ def _spawn_detached(args: List[str]) -> None:
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("AGI_MEMORY_")}
     env["AGI_MEMORY_HOOK"] = "1"
-    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) \
-        if os.name == "nt" else 0
+    extra: Dict[str, Any] = {}
+    if os.name == "nt":
+        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        # CREATE_NO_WINDOW is what actually suppresses the conhost/cmd
+        # popup; DETACHED_PROCESS alone still flashes one on Win10/11.
+        extra = hidden_subprocess_kwargs(flags)
+        flags = extra.pop("creationflags", flags)
+    else:
+        flags = 0
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     env=env, start_new_session=os.name != "nt", creationflags=flags)
+                     env=env, start_new_session=os.name != "nt",
+                     creationflags=flags, **extra)
 
 
 def hook_vault_sync() -> None:
