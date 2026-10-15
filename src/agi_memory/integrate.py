@@ -1300,8 +1300,8 @@ def cmd_install(args: argparse.Namespace) -> None:
     # first prompt already has their history behind it.
     if not getattr(args, "skip_history", False):
         offer_history_import(
-            non_interactive=getattr(args, "yes", False),
-            assume_yes=getattr(args, "yes", False),
+            non_interactive=getattr(args, "yes", False) or getattr(args, "import_history", False),
+            assume_yes=getattr(args, "yes", False) or getattr(args, "import_history", False),
             assume_no=getattr(args, "no_history", False),
             limit=getattr(args, "history_limit", 50))
 
@@ -2066,6 +2066,8 @@ def main() -> None:
     p_install.add_argument("--skip-bootstrap", action="store_true", help="Skip automatic Git/README cold-start memory seeding")
     p_install.add_argument("--no-history", action="store_true",
                            help="Do not offer to import existing session history from installed coding tools")
+    p_install.add_argument("--import-history", action="store_true",
+                           help="Import existing session history automatically without prompting")
     p_install.add_argument("--history-limit", type=int, default=50,
                            help="Recent sessions to turn into searchable memories (default: 50)")
 

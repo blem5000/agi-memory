@@ -79,6 +79,73 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual([], hi.codex_sessions(empty, limit=5))
         self.assertEqual([], hi.claude_sessions(empty, limit=5))
         self.assertEqual([], hi.opencode_sessions(str(empty / "opencode.db"), limit=5))
+        self.assertEqual([], hi.antigravity_sessions(empty, limit=5))
+
+    def test_antigravity_reads_user_request_and_cwd(self):
+        sess_dir = self.root / "brain-uuid-1234" / ".system_generated" / "logs"
+        f = sess_dir / "transcript.jsonl"
+        _write_jsonl(f, [
+            {
+                "step_index": 0,
+                "type": "USER_INPUT",
+                "source": "USER_EXPLICIT",
+                "created_at": "2026-10-15T10:00:00Z",
+                "content": "<USER_REQUEST>\nBuild the new dashboard component\n</USER_REQUEST>\n<METADATA>foo</METADATA>"
+            },
+            {
+                "step_index": 1,
+                "type": "PLANNER_RESPONSE",
+                "source": "MODEL",
+                "created_at": "2026-10-15T10:01:00Z",
+                "tool_calls": [
+                    {
+                        "name": "run_command",
+                        "args": {
+                            "CommandLine": "npm test",
+                            "Cwd": "/Users/x/Projects/dashboard-app"
+                        }
+                    },
+                    {
+                        "name": "write_to_file",
+                        "args": {
+                            "TargetFile": "/Users/x/Projects/dashboard-app/src/Dashboard.tsx"
+                        }
+                    }
+                ]
+            }
+        ])
+        rows = hi.antigravity_sessions(self.root, limit=5)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("brain-uuid-1234", rows[0]["id"])
+        self.assertEqual("dashboard-app", rows[0]["project"])
+        self.assertEqual("agy", rows[0]["harness"])
+        self.assertEqual("Build the new dashboard component", rows[0]["goal"])
+        self.assertEqual("2026-10-15T10:00:00Z", rows[0]["started"])
+        self.assertEqual("2026-10-15T10:01:00Z", rows[0]["ended"])
+        self.assertIn("/Users/x/Projects/dashboard-app/src/Dashboard.tsx", rows[0]["touched"])
+
+    def test_antigravity_unblocked_in_scan(self):
+        rows = hi.scan({"agy": True})
+        self.assertEqual(1, len(rows))
+        self.assertEqual("agy", rows[0]["tool"])
+        self.assertEqual("agy", rows[0]["reader"])
+        self.assertEqual("", rows[0]["reason"])
+
+    def test_digest_redacts_credentials(self):
+        sess = {
+            "id": "sec-1",
+            "harness": "agy",
+            "project": "proj",
+            "goal": "deploy with api_key = sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234",
+            "prompts": ["connect using password = SuperSecret123!"],
+            "started": "2026-10-15T10:00:00Z",
+            "ended": "2026-10-15T10:05:00Z",
+            "touched": []
+        }
+        digest = hi._digest(sess)
+        self.assertNotIn("sk-ant-api03", digest)
+        self.assertNotIn("SuperSecret123!", digest)
+        self.assertIn("[REDACTED]", digest)
 
     def test_corrupt_jsonl_lines_are_skipped(self):
         f = self.root / "s" / "rollout-x.jsonl"

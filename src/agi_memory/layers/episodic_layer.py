@@ -608,6 +608,41 @@ class EpisodicLayer(MemoryLayer):
         con.close()
         return inserted
 
+    def upsert_imported_batch(self, items: list[dict]) -> int:
+        """Backfill multiple historical sessions in a single transaction. Returns count inserted."""
+        if not items:
+            return 0
+        con = self._get_con()
+        cur = con.cursor()
+        inserted = 0
+        try:
+            params = [
+                (
+                    item["session_id"],
+                    item["project"],
+                    (item.get("goal") or "")[:500],
+                    item.get("started_at"),
+                    item.get("ended_at"),
+                    json.dumps((item.get("touched_files") or [])[:50]),
+                )
+                for item in items
+            ]
+            cur.executemany("""
+                INSERT INTO episodic_sessions
+                    (session_id, project, goal, started_at, ended_at, touched_files, status)
+                VALUES (?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP),
+                        COALESCE(?, CURRENT_TIMESTAMP), ?, 'ended')
+                ON CONFLICT(session_id) DO NOTHING
+            """, params)
+            inserted = cur.rowcount if cur.rowcount >= 0 else len(items)
+            con.commit()
+        except sqlite3.Error:
+            con.rollback()
+            inserted = 0
+        finally:
+            con.close()
+        return inserted
+
     def recent_commands(self, binary: str, project: str | None = None,
                         limit: int = 5, ok_only: bool = True) -> List[Dict[str, Any]]:
         """Newest command events for a binary (details JSON: command, exit)."""

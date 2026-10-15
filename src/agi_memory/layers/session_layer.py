@@ -213,10 +213,10 @@ class SessionLayer(MemoryLayer):
         try:
             if proj in ("agi-memory", "agent-memory"):
                 row = con.execute(
-                    "SELECT count(*) FROM observations WHERE project IN ('agi-memory','agent-memory')"
+                    "SELECT count(*) FROM observations WHERE project IN ('agi-memory','agent-memory', '*', 'global')"
                 ).fetchone()
-            elif proj:
-                row = con.execute("SELECT count(*) FROM observations WHERE project = ?", (proj,)).fetchone()
+            elif proj and proj not in ("*", "global"):
+                row = con.execute("SELECT count(*) FROM observations WHERE project IN (?, '*', 'global')", (proj,)).fetchone()
             else:
                 row = con.execute("SELECT count(*) FROM observations").fetchone()
             return int(row[0]) if row else 0
@@ -439,14 +439,27 @@ class SessionLayer(MemoryLayer):
         except sqlite3.Error:
             return []
 
-    def search(self, query: str, limit: int = 5) -> list[Hit]:
-        """Search working memory using SQLite FTS5 with prefix wildcard fallback."""
+    def search(self, query: str, limit: int = 5, max_bytes: int | None = None, max_tokens: int | None = None) -> list[Hit]:
+        """Search working memory using SQLite FTS5 with prefix wildcard fallback and optional byte/token budgeting."""
+        if max_bytes is None and max_tokens is not None:
+            max_bytes = int(max_tokens) * 4
         try:
-            return self._via_sqlite(query, limit)
+            hits = self._via_sqlite(query, limit)
         except sqlite3.Error:
             # Unreadable DB (corrupt, truncated, or schema not yet created by a
             # peer layer sharing the file) degrades to "no hits", never a crash.
             return []
+        if max_bytes and max_bytes > 0:
+            budgeted = []
+            cur = 0
+            for h in hits:
+                h_b = len(h.text.encode("utf-8"))
+                if budgeted and cur + h_b > max_bytes:
+                    break
+                budgeted.append(h)
+                cur += h_b
+            return budgeted
+        return hits
 
     @staticmethod
     def _fact_entries(facts) -> list:
@@ -472,9 +485,9 @@ class SessionLayer(MemoryLayer):
                f"WHERE id IN ({ph})")
         args: list = [int(i) for i in ids]
         if self.project in ("agi-memory", "agent-memory"):
-            sql += " AND (project = 'agi-memory' OR project = 'agent-memory')"
-        elif self.project:
-            sql += " AND project = ?"
+            sql += " AND (project IN ('agi-memory', 'agent-memory', '*', 'global'))"
+        elif self.project and self.project not in ("*", "global"):
+            sql += " AND (project = ? OR project = '*' OR project = 'global')"
             args.append(self.project)
         try:
             rows = con.execute(sql, args).fetchall()
@@ -563,11 +576,14 @@ class SessionLayer(MemoryLayer):
             if len(phrase.split()) >= 2:
                 match = f'"{phrase}" OR ({match})'
             args: list = [match]
+            proj_order = ""
             if self.project in ("agi-memory", "agent-memory"):
-                sql += " AND (project = 'agi-memory' OR project = 'agent-memory')"
-            elif self.project:
-                sql += " AND project = ?"
+                sql += " AND (project IN ('agi-memory', 'agent-memory', '*', 'global'))"
+                proj_order = "(CASE WHEN observations.project IN ('agi-memory', 'agent-memory') THEN 0 ELSE 1 END) ASC, "
+            elif self.project and self.project not in ("*", "global"):
+                sql += " AND (project = ? OR project = '*' OR project = 'global')"
                 args.append(self.project)
+                proj_order = "(CASE WHEN observations.project = ? THEN 0 ELSE 1 END) ASC, "
             # Order: dead decisions last, then an exact title match, then
             # relevance, then a bounded recency nudge, then origin.
             #
@@ -578,10 +594,13 @@ class SessionLayer(MemoryLayer):
             # and never beats a genuinely better match. The rational decay needs
             # no exp(), which SQLite only has when built with math functions.
             sql += (" ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, "
+                    f"{proj_order}"
                     "(CASE WHEN lower(observations.title) = ? THEN 0 ELSE 1 END) ASC, "
                     f"(rank - {RECENCY_BOOST} / (1.0 + ((? - observations.created_at_epoch) / {RECENCY_TAU_MS}.0))) ASC, "
                     "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC "
                     "LIMIT ?")
+            if proj_order and "?" in proj_order:
+                args.append(self.project)
             args += [phrase, int(time.time() * 1000), fetch]
             rows = con.execute(sql, args).fetchall()
 
@@ -593,13 +612,18 @@ class SessionLayer(MemoryLayer):
                                  JOIN observations ON observations.id = observations_fts.rowid
                                  WHERE observations_fts MATCH ?"""
                     args_pfx = [" OR ".join(prefix_tokens)]
+                    pfx_proj_order = ""
                     if self.project in ("agi-memory", "agent-memory"):
-                        sql_pfx += " AND (project = 'agi-memory' OR project = 'agent-memory')"
-                    elif self.project:
-                        sql_pfx += " AND project = ?"
+                        sql_pfx += " AND (project IN ('agi-memory', 'agent-memory', '*', 'global'))"
+                        pfx_proj_order = "(CASE WHEN observations.project IN ('agi-memory', 'agent-memory') THEN 0 ELSE 1 END) ASC, "
+                    elif self.project and self.project not in ("*", "global"):
+                        sql_pfx += " AND (project = ? OR project = '*' OR project = 'global')"
                         args_pfx.append(self.project)
-                    sql_pfx += " ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, rank, " \
+                        pfx_proj_order = "(CASE WHEN observations.project = ? THEN 0 ELSE 1 END) ASC, "
+                    sql_pfx += f" ORDER BY (CASE WHEN observations.type = 'superseded' THEN 1 ELSE 0 END) ASC, {pfx_proj_order}rank, " \
                         "(CASE observations.origin WHEN 'user-confirmed' THEN 0 WHEN 'bootstrapped' THEN 2 ELSE 1 END) ASC LIMIT ?"
+                    if pfx_proj_order and "?" in pfx_proj_order:
+                        args_pfx.append(self.project)
                     args_pfx.append(fetch)
                     rows = con.execute(sql_pfx, args_pfx).fetchall()
 
@@ -1080,16 +1104,16 @@ class SessionLayer(MemoryLayer):
         return updated
 
     def get_pinned_blocks(self, project: str | None = None) -> list[dict]:
-        """Return all active pinned blocks (pinned = 1) where project = ? OR project = 'global' (or all if project is None)."""
+        """Return all active pinned blocks (pinned = 1) where project = ? OR project in ('global', '*') with scope shadowing."""
         if not self.db_path.exists():
             return []
         con = open_db(self.db_path)
         self._ensure_core_table(con)
-        if project:
+        if project and project not in ("*", "global"):
             sql = ("SELECT id, block_key, content, category, project, pinned, created_at, updated_at "
-                   "FROM core_memory_blocks WHERE pinned = 1 AND (project = ? OR project = 'global') "
-                   "ORDER BY id ASC")
-            rows = con.execute(sql, [project]).fetchall()
+                   "FROM core_memory_blocks WHERE pinned = 1 AND (project = ? OR project = 'global' OR project = '*') "
+                   "ORDER BY (CASE WHEN project = ? THEN 0 ELSE 1 END) ASC, id ASC")
+            rows = con.execute(sql, [project, project]).fetchall()
         else:
             sql = ("SELECT id, block_key, content, category, project, pinned, created_at, updated_at "
                    "FROM core_memory_blocks WHERE pinned = 1 ORDER BY id ASC")
@@ -1116,10 +1140,11 @@ class SessionLayer(MemoryLayer):
             return []
         con = open_db(self.db_path)
         self._ensure_core_table(con)
-        if project:
+        if project and project not in ("*", "global"):
             sql = ("SELECT id, block_key, content, category, project, pinned, created_at, updated_at "
-                   "FROM core_memory_blocks WHERE project = ? OR project = 'global' ORDER BY id ASC")
-            rows = con.execute(sql, [project]).fetchall()
+                   "FROM core_memory_blocks WHERE (project = ? OR project = 'global' OR project = '*') "
+                   "ORDER BY (CASE WHEN project = ? THEN 0 ELSE 1 END) ASC, id ASC")
+            rows = con.execute(sql, [project, project]).fetchall()
         else:
             sql = ("SELECT id, block_key, content, category, project, pinned, created_at, updated_at "
                    "FROM core_memory_blocks ORDER BY id ASC")

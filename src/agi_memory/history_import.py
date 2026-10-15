@@ -43,6 +43,15 @@ except ImportError:  # pragma: no cover - only when the package layout is flat
         def classify_category(title: str, ctx: str) -> str:
             return "decision"
 
+try:
+    from agi_memory.redact import redact
+except ImportError:
+    try:
+        from redact import redact
+    except ImportError:
+        def redact(text, extra=()):
+            return text
+
 # ponytail: reads whole transcript files line by line, no size cap; a 200 MB
 # rollout would be slow. Cap per-file bytes if a harness starts writing those.
 MAX_PROMPTS = 6
@@ -216,27 +225,116 @@ def opencode_sessions(db_path: str | None = None, limit: int = 50) -> List[Dict[
     return out
 
 
-READERS = {"codex": codex_sessions, "claude": claude_sessions, "opencode": opencode_sessions}
+def antigravity_sessions(root: Path | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """`~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl`:
+    user turns, tool call directories, and touched files."""
+    if root:
+        bases = [Path(root)]
+    else:
+        bases = [
+            Path(os.environ.get("ANTIGRAVITY_BRAIN_DIR", "")),
+            Path(os.environ.get("GEMINI_BRAIN_DIR", "")),
+            _home() / ".gemini" / "antigravity-cli" / "brain",
+            _home() / ".gemini" / "brain",
+            _home() / ".antigravity" / "brain",
+        ]
+    files: List[Path] = []
+    for base in bases:
+        if base and base.exists():
+            found = list(base.glob("*/.system_generated/logs/transcript.jsonl"))
+            if not found:
+                found = list(base.glob("*/transcript.jsonl"))
+            files.extend(found)
+            if files:
+                break
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if limit > 0:
+        files = files[:limit]
+
+    out = []
+    for f in files:
+        if f.parent.parent.name == ".system_generated":
+            sid = f.parent.parent.parent.name
+        elif f.parent.name in ("logs", ".system_generated"):
+            sid = f.parent.parent.name
+        else:
+            sid = f.parent.name
+        cwd = started = ended = ""
+        prompts: List[str] = []
+        touched: List[str] = []
+        touched_set = set()
+        for row in _jsonl(f):
+            created = _iso(row.get("created_at") or row.get("timestamp"))
+            if not started and created:
+                started = created
+            if created:
+                ended = created
+            kind = row.get("type")
+            if kind == "USER_INPUT":
+                raw_text = _text_of(row.get("content"))
+                # Strip XML wrappers like <USER_REQUEST> if present
+                if "<USER_REQUEST>" in raw_text:
+                    import re
+                    m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", raw_text, re.DOTALL)
+                    raw_text = m.group(1) if m else raw_text
+                text = _real_prompt(raw_text)
+                if text and len(prompts) < MAX_PROMPTS:
+                    prompts.append(text[:PROMPT_CHARS])
+            for tc in (row.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                args = tc.get("args") or {}
+                if not isinstance(args, dict):
+                    continue
+                c = args.get("Cwd")
+                if c and isinstance(c, str):
+                    clean_c = c.strip("\"'")
+                    if clean_c and not cwd:
+                        cwd = clean_c
+                for key in ("TargetFile", "AbsolutePath", "FilePath"):
+                    val = args.get(key)
+                    if val and isinstance(val, str):
+                        clean_v = val.strip("\"'")
+                        if clean_v and not clean_v.startswith(str(_home() / ".gemini")) and clean_v not in touched_set:
+                            touched_set.add(clean_v)
+                            touched.append(clean_v)
+
+        if sid:
+            out.append({
+                "id": sid,
+                "project": map_project(cwd),
+                "harness": "agy",
+                "goal": (prompts[0] if prompts else "antigravity session")[:500],
+                "started": started,
+                "ended": ended,
+                "touched": touched[:50],
+                "prompts": prompts,
+            })
+    return out
+
+
+READERS = {
+    "codex": codex_sessions,
+    "claude": claude_sessions,
+    "opencode": opencode_sessions,
+    "agy": antigravity_sessions,
+    "antigravity": antigravity_sessions,
+}
 
 # Which supported assistant's transcripts we know how to read, keyed by the
 # integration name used everywhere else (`agi-integrate install <name>`).
-TOOL_READERS = {"claude": "claude", "codex": "codex", "opencode": "opencode"}
+TOOL_READERS = {"claude": "claude", "codex": "codex", "opencode": "opencode", "agy": "agy"}
 
-# Detected, and deliberately not read. Both were checked on disk, and both fail
-# for a reason that is not worth an adapter:
+# Detected, and deliberately not read. Checked on disk, and fails for a reason
+# that is not worth an adapter:
 #
 #   hermes -- ~/.hermes/sessions holds `request_dump_*.json`: outbound LLM API
 #             request bodies including Authorization headers. Importing those
 #             would copy credentials into a git-synced vault. Never read it.
-#   agy    -- ~/.gemini/antigravity-cli/conversations/*.db stores trajectories
-#             as protobuf blobs with no published schema. Reading it means
-#             guessing at a private wire format, which yields confident garbage
-#             rather than memories.
 #
 # Say so out loud instead of appearing to support them.
 BLOCKED = {
     "hermes": "sessions are API request dumps containing auth headers -- never read",
-    "agy": "conversations are protobuf blobs with no published schema",
 }
 
 
@@ -333,7 +431,8 @@ def _digest(s: Dict[str, Any]) -> str:
     if len(prompts) > 1:
         lines.append("\nWhat was asked:")
         lines += [f"- {p[:200]}" for p in prompts[1:]]
-    return "\n".join(lines)[:DIGEST_CHARS]
+    raw = "\n".join(lines)[:DIGEST_CHARS]
+    return redact(raw)
 
 
 def import_index(harness: str = "all", limit: int = 0, project: str | None = None,
@@ -352,11 +451,25 @@ def import_index(harness: str = "all", limit: int = 0, project: str | None = Non
         sessions = [s for s in sessions if s["project"] == project]
     ep = EpisodicLayer(project="global", db_path=db_path)
     indexed = 0
-    for s in sessions:
-        if ep.upsert_imported(f"{s['harness']}:{s['id']}", s["project"], goal=s["goal"],
-                              started_at=s.get("started"), ended_at=s.get("ended"),
-                              touched_files=s.get("touched")):
-            indexed += 1
+    if hasattr(ep, "upsert_imported_batch"):
+        items = [
+            {
+                "session_id": f"{s['harness']}:{s['id']}",
+                "project": s["project"],
+                "goal": redact(s.get("goal") or ""),
+                "started_at": s.get("started"),
+                "ended_at": s.get("ended"),
+                "touched_files": s.get("touched"),
+            }
+            for s in sessions
+        ]
+        indexed = ep.upsert_imported_batch(items)
+    else:
+        for s in sessions:
+            if ep.upsert_imported(f"{s['harness']}:{s['id']}", s["project"], goal=redact(s.get("goal") or ""),
+                                  started_at=s.get("started"), ended_at=s.get("ended"),
+                                  touched_files=s.get("touched")):
+                indexed += 1
     return {"listed": len(sessions), "indexed": indexed}
 
 

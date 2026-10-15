@@ -10,8 +10,14 @@ except ImportError:
 
 
 def recall(query: str, l1: MemoryLayer, l2: MemoryLayer | None = None,
-           limit: int = 5, deep: bool = False) -> dict:
-    recent = l1.search(query, limit=limit)
+           limit: int = 5, deep: bool = False,
+           max_bytes: int | None = None, max_tokens: int | None = None) -> dict:
+    if max_bytes is None and max_tokens is not None:
+        max_bytes = int(max_tokens) * 4
+    try:
+        recent = l1.search(query, limit=limit, max_bytes=max_bytes)  # type: ignore
+    except TypeError:
+        recent = l1.search(query, limit=limit)
     result: dict = {"recent": recent, "durable": []}
     
     if hasattr(l1, "get_pinned_blocks"):
@@ -54,12 +60,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--project", "-p", default=None, help="Filter by project name")
     parser.add_argument("--limit", "-l", type=int, default=5, help="Hit limit (default 5)")
     parser.add_argument("--deep", "-d", action="store_true", help="Force deep recall from durable layer")
+    parser.add_argument("--max-bytes", type=int, default=None, help="Maximum UTF-8 byte budget")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Maximum token budget (~4 bytes/token)")
     args = parser.parse_args(argv)
 
     l1 = SessionLayer(project=args.project)
     l2 = GraphLayer(project=args.project)
 
-    res = recall(args.query, l1, l2, limit=args.limit, deep=args.deep)
+    res = recall(args.query, l1, l2, limit=args.limit, deep=args.deep,
+                 max_bytes=args.max_bytes, max_tokens=args.max_tokens)
     if res.get("core"):
         print("## core memory (pinned)")
         for b in res["core"]:

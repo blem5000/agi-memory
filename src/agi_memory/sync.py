@@ -38,6 +38,7 @@ try:
         import_from_vault,
         init_vault,
     )
+    from agi_memory import vault_lock
 except ImportError:
     from config import (DATA_DIR, SYNC_CONFIG_FILE, VAULT_DIR,
                       assert_vault_isolation, get_data_dir, get_vault_dir)
@@ -50,6 +51,7 @@ except ImportError:
         import_from_vault,
         init_vault,
     )
+    import vault_lock
 DEDUPE_INTERVAL_SECONDS = 7 * 24 * 3600  # 7 days
 DEDUPE_COUNT_THRESHOLD = 50  # auto-dedupe after 50 new observations
 
@@ -57,7 +59,6 @@ DEDUPE_COUNT_THRESHOLD = 50  # auto-dedupe after 50 new observations
 def _process_lock(vault_dir: Path):
     """Cross-process lock around a sync. Advisory: it prevents interleaved
     writers and nothing else."""
-    from agi_memory import vault_lock
     return vault_lock.acquire(vault_dir)
 
 
@@ -738,7 +739,6 @@ def main():
         except RuntimeError as e:
             containment = f"PROBLEM: {e}"
         try:
-            from agi_memory import vault_lock
             lock_state = vault_lock.status(v)
         except Exception:
             lock_state = "unknown"

@@ -17,6 +17,13 @@ import sys
 import time
 from pathlib import Path
 
+_HERE = Path(__file__).resolve().parent
+_SRC = _HERE.parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
 try:
     from agi_memory.layers.base import MemoryLayer, open_db  # noqa: F401
     from agi_memory.layers.session_layer import SessionLayer
@@ -72,15 +79,19 @@ TOOLS = [
      "description": "Search recent agent session memory (decisions, fixes, context). Fast, local. Matching is by keyword, not meaning, and any term can match: include the other words a past note may have used (e.g. 'login auth authentication session').",
      "inputSchema": {"type": "object",
                      "properties": {"query": {"type": "string", "description": "Search query or keywords to recall"},
-                                    "project": {"type": "string", "description": "Optional project name filter"},
-                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"}},
+                                    "project": {"type": "string", "description": "Optional project name filter (or '*' for user-global rules)"},
+                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"},
+                                    "max_bytes": {"type": "integer", "description": "Optional maximum UTF-8 byte budget for returned response"},
+                                    "max_tokens": {"type": "integer", "description": "Optional maximum token budget (~4 bytes/token)"}},
                      "required": ["query"]}},
     {"name": "memory_recall_deep",
      "description": "Search session memory AND durable long-term knowledge (architecture, reusable fixes).",
      "inputSchema": {"type": "object",
                      "properties": {"query": {"type": "string", "description": "Search query or keywords to recall"},
-                                    "project": {"type": "string", "description": "Optional project name filter"},
-                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"}},
+                                    "project": {"type": "string", "description": "Optional project name filter (or '*' for user-global rules)"},
+                                    "limit": {"type": "integer", "default": 5, "description": "Max hits to return"},
+                                    "max_bytes": {"type": "integer", "description": "Optional maximum UTF-8 byte budget for returned response"},
+                                    "max_tokens": {"type": "integer", "description": "Optional maximum token budget (~4 bytes/token)"}},
                      "required": ["query"]}},
     {"name": "memory_record",
      "description": "Save a decision, pattern, rule, or bugfix into session memory, and optionally the knowledge graph, so every agent can recall it.",
@@ -260,6 +271,21 @@ def _findings_block(refs, project, layer=None) -> str:
 
 def _hits_text(hits):
     return "\n---\n".join(h.text for h in hits) or "(no hits)"
+
+
+def _apply_budget(text: str, max_bytes: int | None = None) -> str:
+    """Cap output to a strict UTF-8 byte budget without breaking UTF-8 encoding."""
+    if not max_bytes or max_bytes <= 0:
+        return text
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    indicator = b"\n... [budget reached]"
+    avail = max(0, max_bytes - len(indicator))
+    trimmed = encoded[:avail].decode("utf-8", errors="ignore")
+    if "\n" in trimmed:
+        trimmed = trimmed.rsplit("\n", 1)[0]
+    return trimmed + "\n... [budget reached]"
 
 
 def _miss_text(query: str, project, layer) -> str:
@@ -450,37 +476,66 @@ def call_tool(name, args):
         query = str(args.get("query", "")).strip()
         if not query:
             return "(empty query)"
+        max_bytes = args.get("max_bytes")
+        max_tokens = args.get("max_tokens")
+        if max_bytes is None and max_tokens is not None:
+            try:
+                max_bytes = int(max_tokens) * 4
+            except (ValueError, TypeError):
+                max_bytes = None
+        elif max_bytes is not None:
+            try:
+                max_bytes = int(max_bytes)
+            except (ValueError, TypeError):
+                max_bytes = None
+
         pinned = l1.get_pinned_blocks(project=project) if hasattr(l1, "get_pinned_blocks") else []
         core_block = _core_text(pinned)
-        hits = l1.search(query, limit)
+        hits = l1.search(query, limit, max_bytes=max_bytes)
         l1.mark_shown([h.ref for h in hits])
         recent_text = _hits_text(hits) if hits else _miss_text(query, project, l1)
         findings = _findings_block([h.ref for h in hits], project, l1)
         if core_block:
-            return f"{core_block}\n\n## recent\n{recent_text}{findings}"
-        return recent_text + findings
+            ret = f"{core_block}\n\n## recent\n{recent_text}{findings}"
+        else:
+            ret = recent_text + findings
+        return _apply_budget(ret, max_bytes)
+
     if name == "memory_recall_deep":
         query = str(args.get("query", "")).strip()
         if not query:
             return "(empty query)"
+        max_bytes = args.get("max_bytes")
+        max_tokens = args.get("max_tokens")
+        if max_bytes is None and max_tokens is not None:
+            try:
+                max_bytes = int(max_tokens) * 4
+            except (ValueError, TypeError):
+                max_bytes = None
+        elif max_bytes is not None:
+            try:
+                max_bytes = int(max_bytes)
+            except (ValueError, TypeError):
+                max_bytes = None
+
         try:
             l2: MemoryLayer | None = GraphLayer(project=project)
         except Exception:
             l2 = None
-        r = recall(query, l1, l2, limit=limit, deep=True)
+        r = recall(query, l1, l2, limit=limit, deep=True, max_bytes=max_bytes)
         out = ""
         core_block = _core_text(r.get("core") or (l1.get_pinned_blocks(project=project) if hasattr(l1, "get_pinned_blocks") else []))
         if core_block:
             out += core_block + "\n\n"
         if not r["recent"] and not r.get("durable"):
             out += _miss_text(query, project, l1)
-            return out
+            return _apply_budget(out, max_bytes)
         out += "## recent\n" + _hits_text(r["recent"])
         if r["durable"]:
             out += "\n\n## durable\n" + _hits_text(r["durable"])
         elif r.get("note"):
             out += f"\n\n({r['note']})"
-        return out
+        return _apply_budget(out, max_bytes)
     if name == "memory_pin":
         key = str(args.get("key", "")).strip()
         content = str(args.get("content", "")).strip()
