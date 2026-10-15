@@ -4,7 +4,7 @@ class AgentMemory < Formula
   desc "Turnkey zero-dependency four-pillar cognitive memory framework for AI coding assistants"
   homepage "https://github.com/kdbhalala/agi-memory"
   url "https://github.com/kdbhalala/agi-memory/archive/refs/tags/v0.11.0.tar.gz"
-  sha256 "0c8520caaba7d897be2e69902f4022c26c8876f93350073658c9a94ff6f96a1c"
+  sha256 "37e8a5e53664ba36ac29a2ac90e76286157bd08ea7b178537527401895f6d90c"
   license "MIT"
   head "https://github.com/kdbhalala/agi-memory.git", branch: "main"
 
