@@ -1397,6 +1397,20 @@ def main(argv: list[str] | None = None) -> None:
         elif cmd == "stats":
             cmd_stats(argv[1:])
             return
+        elif cmd == "audit":
+            try:
+                from agi_memory import audit as _audit
+            except ImportError:
+                import audit as _audit
+            _audit.main(argv[1:])
+            return
+        elif cmd == "tui":
+            try:
+                from agi_memory import tui as _tui
+            except ImportError:
+                import tui as _tui
+            _tui.main(argv[1:])
+            return
         elif cmd == "snapshot":
             try:
                 from agi_memory import hooks as _hooks
@@ -1419,6 +1433,8 @@ def main(argv: list[str] | None = None) -> None:
             print("Usage:")
             print("  agi-memory                           Start MCP stdio server")
             print("  agi-memory stats [--json]            Show local cognitive memory statistics")
+            print("  agi-memory tui [--headless]          Zero-dependency terminal inspector & dashboard")
+            print("  agi-memory audit [--prune]           Audit and prune low-impact memories")
             print("  agi-memory bootstrap [--repo .]      Bootstrap initial memories from Git & README")
             print("  agi-memory history-import [--index]  Import prior claude/codex/opencode sessions")
             print("  agi-memory timeline [--limit 5]      Inspect past session timelines and recaps")

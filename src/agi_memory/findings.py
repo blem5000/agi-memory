@@ -101,6 +101,16 @@ def _missing_files(db_path, project: Optional[str], paths: Iterable[str]):
         return set()
 
 
+def _drifted_symbols(db_path, project: Optional[str], paths: Iterable[str]) -> List[Dict[str, Any]]:
+    """Symbols in indexed paths whose current code implementation on disk has drifted."""
+    try:
+        from agi_memory.layers.code_layer import CodeLayer
+        cl = CodeLayer(project=project, db_path=db_path)
+        return cl.detect_symbol_drift(paths, project=project)
+    except Exception:
+        return []
+
+
 def for_observations(ids: Iterable[str], project: Optional[str] = None,
                      db_path=None) -> List[str]:
     """Findings for the observations a recall just returned.
@@ -160,6 +170,16 @@ def for_observations(ids: Iterable[str], project: Optional[str] = None,
                 findings.append(
                     f"#{oid} references {len(gone)} file(s) that no longer exist: {names}. "
                     f"Check its claim against the current code.")
+            else:
+                drifted = _drifted_symbols(db_path, project, real)
+                if drifted:
+                    sample = drifted[0]
+                    sym_name = sample.get("symbol", "code")
+                    rel_fp = sample.get("file", "source")
+                    change_kind = sample.get("change", "modified").replace("_", " ")
+                    findings.append(
+                        f"#{oid} references '{sym_name}' in {rel_fp} whose code implementation has drifted ({change_kind}). "
+                        f"Check its claim against the current code.")
         # 2. An inference that keeps being served and is never confirmed.
         if origin == "agent-inferred" and shown >= SUSPICIOUS_SHOWS and oid not in cited:
             findings.append(

@@ -86,6 +86,23 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
             prefix = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
             return f"{prefix}{node.name}({', '.join(args)}){ret}"
 
+        def _compute_ast_hash(self, node: ast.AST) -> str:
+            try:
+                body = getattr(node, "body", [])
+                clean_body = [
+                    stmt for stmt in body
+                    if not (isinstance(stmt, ast.Expr) and isinstance(getattr(stmt, "value", None), ast.Constant) and isinstance(stmt.value.value, str))
+                ]
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    dummy = ast.FunctionDef(name=node.name, args=node.args, body=clean_body, decorator_list=node.decorator_list, returns=node.returns, lineno=1)
+                elif isinstance(node, ast.ClassDef):
+                    dummy = ast.ClassDef(name=node.name, bases=node.bases, keywords=node.keywords, body=clean_body, decorator_list=node.decorator_list, lineno=1)
+                else:
+                    dummy = node
+                return hashlib.sha256(ast.unparse(dummy).encode("utf-8")).hexdigest()[:16]
+            except Exception:
+                return ""
+
         def visit_Import(self, node: ast.Import):
             for alias in node.names:
                 edges.append({
@@ -122,7 +139,8 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
                 "docstring": doc,
                 "start_line": node.lineno,
                 "end_line": end_line,
-                "parent_symbol": parent
+                "parent_symbol": parent,
+                "ast_hash": self._compute_ast_hash(node)
             })
 
             edges.append({
@@ -170,6 +188,7 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
                     "start_line": node.lineno,
                     "end_line": getattr(node, "end_lineno", node.lineno),
                     "parent_symbol": None,
+                    "ast_hash": self._compute_ast_hash(node)
                 })
                 edges.append({
                     "source": rel_path,
@@ -201,7 +220,8 @@ def parse_python_code(content: str, rel_path: str) -> Tuple[List[Dict[str, Any]]
                 "docstring": doc,
                 "start_line": node.lineno,
                 "end_line": end_line,
-                "parent_symbol": parent
+                "parent_symbol": parent,
+                "ast_hash": self._compute_ast_hash(node)
             })
 
             edges.append({
@@ -718,9 +738,12 @@ class CodeLayer(MemoryLayer):
                 start_line INTEGER NOT NULL,
                 end_line INTEGER NOT NULL,
                 parent_symbol TEXT,
+                ast_hash TEXT,
                 FOREIGN KEY(file_id) REFERENCES code_files(id) ON DELETE CASCADE
             )
         """)
+        if "ast_hash" not in {r[1] for r in cur.execute("PRAGMA table_info(code_symbols)")}:
+            cur.execute("ALTER TABLE code_symbols ADD COLUMN ast_hash TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_code_symbols_name ON code_symbols(project, name)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_code_symbols_file ON code_symbols(project, file_path)")
 
@@ -842,12 +865,12 @@ class CodeLayer(MemoryLayer):
             cur.execute("""
                 INSERT INTO code_symbols (
                     file_id, project, file_path, name, qualified_name, kind,
-                    signature, docstring, start_line, end_line, parent_symbol
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    signature, docstring, start_line, end_line, parent_symbol, ast_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 file_id, proj, rel_path, sym["name"], sym["qualified_name"], sym["kind"],
                 sym.get("signature"), sym.get("docstring"), sym["start_line"],
-                sym["end_line"], sym.get("parent_symbol")
+                sym["end_line"], sym.get("parent_symbol"), sym.get("ast_hash")
             ))
 
         for ed in edges:
@@ -960,6 +983,64 @@ class CodeLayer(MemoryLayer):
         """Copy result rows with `stale` set where the file is gone."""
         gone = self.missing_paths({r.get("file_path") for r in rows}, project)
         return [{**r, "stale": r.get("file_path") in gone} for r in rows]
+
+    def detect_symbol_drift(self, paths: Iterable[str], project: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Identify symbols in indexed paths whose current implementation on disk has drifted."""
+        wanted = {str(p).strip().replace("\\", "/").lstrip("./") for p in paths if p and str(p).strip()}
+        if not wanted:
+            return []
+        proj = project or self.project
+        con = self._get_con(mode="ro")
+        try:
+            sql = "SELECT id, file_path, language, content_hash, root_dir FROM code_files WHERE root_dir IS NOT NULL"
+            args: list = []
+            if proj:
+                sql += " AND project = ?"
+                args.append(proj)
+            files = con.execute(sql, args).fetchall()
+            target_files = [
+                f for f in files
+                if f[1] in wanted or any(w.endswith(f[1]) or f[1].endswith(w) for w in wanted)
+            ]
+            if not target_files:
+                return []
+
+            drifted = []
+            for file_id, rel_path, lang, stored_hash, root in target_files:
+                disk_path = Path(root) / rel_path
+                if not disk_path.exists():
+                    continue
+                try:
+                    current_content = disk_path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if _compute_hash(current_content) == stored_hash:
+                    continue
+
+                current_symbols, _ = parse_source_code(current_content, rel_path, lang)
+                curr_map = {s["name"]: s for s in current_symbols}
+
+                stored_symbols = con.execute(
+                    "SELECT name, kind, signature, ast_hash FROM code_symbols WHERE file_id = ? "
+                    "ORDER BY CASE kind WHEN 'function' THEN 1 WHEN 'method' THEN 2 WHEN 'constant' THEN 3 WHEN 'class' THEN 4 ELSE 5 END",
+                    (file_id,)
+                ).fetchall()
+
+                for s_name, s_kind, s_sig, s_hash in stored_symbols:
+                    if s_name not in curr_map:
+                        drifted.append({"file": rel_path, "symbol": s_name, "change": "removed"})
+                    else:
+                        live_sym = curr_map[s_name]
+                        live_hash = live_sym.get("ast_hash")
+                        if s_sig and live_sym.get("signature") and s_sig != live_sym.get("signature"):
+                            drifted.append({"file": rel_path, "symbol": s_name, "change": "signature_drifted"})
+                        elif s_hash and live_hash and s_hash != live_hash:
+                            drifted.append({"file": rel_path, "symbol": s_name, "change": "body_drifted"})
+            return drifted
+        except Exception:
+            return []
+        finally:
+            con.close()
 
     def search_symbols(self, query: str, project: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
         """Microsecond symbol search via SQLite FTS5 with fallback to prefix match."""

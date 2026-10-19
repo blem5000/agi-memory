@@ -1,6 +1,6 @@
 [project]
 name = "agi-memory"
-version = "0.11.0"
+version = "0.12.0"
 description = "Turnkey zero-dependency four-pillar cognitive memory framework (Epistemic, Semantic, Episodic, Structural Code Graph) with MCP server for Claude Code, Cursor, Codex, OpenCode, Antigravity, and more"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,10 @@ agi-recall = "agi_memory.recall:main"
 agent-recall = "agi_memory.recall:main"
 agi-sync = "agi_memory.sync:main"
 agent-sync = "agi_memory.sync:main"
+agi-audit = "agi_memory.audit:main"
+agent-audit = "agi_memory.audit:main"
+agi-tui = "agi_memory.tui:main"
+agent-tui = "agi_memory.tui:main"
 
 [project.urls]
 Homepage = "https://github.com/kdbhalala/agi-memory"
