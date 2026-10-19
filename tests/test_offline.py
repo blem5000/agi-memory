@@ -299,9 +299,12 @@ with tempfile.TemporaryDirectory() as fold_dir:
     _folded = str(_twin_a["id"] if str(_twin_b["id"]) in _refs else _twin_b["id"])
     assert f"same-title: #{_folded}" in " ".join(h.text for h in _fold_hits), \
         "the folded id must be named on the survivor"
-    with sqlite3.connect(Path(fold_dir) / "fold.db") as _fc:
+    _fc = sqlite3.connect(Path(fold_dir) / "fold.db")
+    try:
         assert _fc.execute("SELECT COUNT(*) FROM observations").fetchone()[0] == 5, \
             "folding must never delete a row"
+    finally:
+        _fc.close()
     # A row with no title must never fold -- 55 such rows exist in the real store.
     assert len(_SLf._collapse_same_title(
         [Hit(text=f"#{i} [p] : body", source="session", ref=str(i), meta={"title_key": ""})
