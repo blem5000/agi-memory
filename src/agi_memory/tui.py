@@ -140,9 +140,9 @@ def gather_stats(db_path: Path, vault_dir: Path) -> Dict[str, Any]:
 
         stats["l1_observations"] = _count("SELECT COUNT(*) FROM observations")
         stats["pinned_blocks"] = _count("SELECT COUNT(*) FROM core_memory_blocks WHERE status = 'pinned'")
-        stats["l2_entities"] = _count("SELECT COUNT(*) FROM graph_entities")
+        stats["l2_entities"] = _count("SELECT COUNT(*) FROM graph_nodes")
         stats["l2_active_edges"] = _count("SELECT COUNT(*) FROM graph_edges WHERE is_active = 1")
-        stats["l3_sessions"] = _count("SELECT COUNT(DISTINCT session_id) FROM session_events")
+        stats["l3_sessions"] = _count("SELECT COUNT(DISTINCT session_id) FROM episodic_sessions")
         stats["l4_symbols"] = _count("SELECT COUNT(*) FROM code_symbols")
         stats["l4_files"] = _count("SELECT COUNT(*) FROM code_files")
 

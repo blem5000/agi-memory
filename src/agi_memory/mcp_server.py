@@ -1221,9 +1221,9 @@ def cmd_stats(argv: list[str]) -> None:
 
         total_obs = _count(f"SELECT COUNT(*) FROM observations{obs_filter}", obs_params)
         pinned_blocks = _count(f"SELECT COUNT(*) FROM core_memory_blocks WHERE status = 'pinned'{' AND project = ?' if args.project else ''}", obs_params)
-        total_entities = _count("SELECT COUNT(*) FROM graph_entities")
-        active_edges = _count("SELECT COUNT(*) FROM graph_edges WHERE is_active = 1")
-        total_sessions = _count(f"SELECT COUNT(DISTINCT session_id) FROM session_events{obs_filter}", obs_params)
+        total_entities = _count(f"SELECT COUNT(*) FROM graph_nodes{' WHERE project = ?' if args.project else ''}", obs_params)
+        active_edges = _count(f"SELECT COUNT(*) FROM graph_edges WHERE is_active = 1{' AND project = ?' if args.project else ''}", obs_params)
+        total_sessions = _count(f"SELECT COUNT(DISTINCT session_id) FROM episodic_sessions{obs_filter}", obs_params)
         total_symbols = _count(f"SELECT COUNT(*) FROM code_symbols{obs_filter}", obs_params)
 
         cur.execute("SELECT project, COUNT(*) as c FROM observations GROUP BY project ORDER BY c DESC LIMIT 10")
