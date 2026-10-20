@@ -26,14 +26,14 @@ class ScanTests(unittest.TestCase):
     def test_every_detected_tool_appears_with_a_reason_when_skipped(self):
         rows = hi.scan({t: True for t in ("claude", "cursor", "hermes", "agy")})
         by = {r["tool"]: r for r in rows}
-        # The readable one is not blocked...
+        # The readable ones are not blocked...
         self.assertEqual("claude", by["claude"]["reader"])
+        self.assertEqual("agy", by["agy"]["reader"])
         # ...and a tool with no reader says so rather than vanishing.
         self.assertIsNone(by["cursor"]["reader"])
         self.assertIn("no reader", by["cursor"]["reason"])
-        # ...and the two we refuse on purpose say why, in specific terms.
+        # ...and the one we refuse on purpose says why, in specific terms.
         self.assertIn("auth headers", by["hermes"]["reason"])
-        self.assertIn("protobuf", by["agy"]["reason"])
 
     def test_blocked_tools_never_get_a_reader(self):
         for tool in hi.BLOCKED:

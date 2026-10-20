@@ -111,6 +111,10 @@ create_wrapper "agi-recall" "recall"
 create_wrapper "agent-recall" "recall"
 create_wrapper "agi-sync" "sync"
 create_wrapper "agent-sync" "sync"
+create_wrapper "agi-audit" "audit"
+create_wrapper "agent-audit" "audit"
+create_wrapper "agi-tui" "tui"
+create_wrapper "agent-tui" "tui"
 
 # 4. Initialize Vault
 echo -e "\n${BOLD}[4/6] Initializing canonical vault storage...${NC}"
