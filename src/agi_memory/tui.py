@@ -150,7 +150,7 @@ def gather_stats(db_path: Path, vault_dir: Path) -> Dict[str, Any]:
         stats["projects"] = {r[0] or "default": r[1] for r in cur.fetchall()}
 
         stats["recall_shown"] = _count("SELECT COUNT(*) FROM memory_usage")
-        stats["recall_cited"] = _count("SELECT SUM(relevance_count) FROM observations")
+        stats["recall_cited"] = _count("SELECT COUNT(*) FROM memory_usage WHERE cited_count > 0")
     except Exception:
         pass
     finally:

@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.1] - 2026-10-20
+
+### Fixed
+- **Terminal Inspector Citation Metrics**:
+  - Corrected `Citations in decisions` metric in `agi-tui` to query `memory_usage.cited_count` instead of unpopulated `observations.relevance_count`.
+  - Accurately reports downstream memory citations shaping agent decisions.
+
+---
+
 ## [0.13.0] - 2026-10-20
 
 ### Added
