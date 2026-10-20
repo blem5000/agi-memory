@@ -1,5 +1,20 @@
 # CLI Usage
 
+### Interactive God-Mode Terminal Inspector (`agi-tui`)
+Interactive split-pane dashboard, live FTS5 memory explorer, knowledge graph browser, and vault hygiene auditor:
+```bash
+# Launch interactive dashboard
+agi-tui
+# or
+agi-memory tui
+
+# Programmatic non-interactive snapshots for agents and CI pipelines:
+agi-tui --once
+agi-tui --tab 2 --search "auth" --once
+agi-tui --tab 6 --once
+```
+See full documentation, keyboard bindings, and agent automation patterns in [Terminal Inspector (`agi-tui`)](tui.md).
+
 ### Developer Observability & Curation CLI
 Audit, inspect, and curate memories and codebase graphs directly from the terminal:
 ```bash

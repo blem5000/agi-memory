@@ -116,6 +116,7 @@ assistant is reconfigured, and no hook is installed.
 
 ```bash
 pipx install agi-memory
+agi-tui                                  # interactive god-mode dashboard & split-pane explorer
 agi-memory history-import --limit 20     # index the sessions already on this machine
 agi-memory stats                         # what it knows, right now
 agi-recall "webhook retry"               # search it
@@ -194,6 +195,7 @@ in [Installation](docs/installation.md).
 
 | Guide | What's in it |
 |---|---|
+| [Terminal Inspector (`agi-tui`)](docs/tui.md) | God-mode interactive dashboard, split-pane memory explorer, live FTS5 search |
 | [Installation](docs/installation.md) | Install options, upgrading, lifecycle hooks |
 | [CLI Usage](docs/cli.md) | Every `agi-memory` and `agi-integrate` command |
 | [Supported Assistants](docs/assistants.md) | Where each assistant's config lives, and the 18 MCP tools |
