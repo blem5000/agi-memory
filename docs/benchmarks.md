@@ -43,37 +43,44 @@ for it, which proves it does not crash, not that it is correct on your code.
 The ceiling is stated in the README under "How it works" because that is where
 a user decides whether to trust `code_impact` before a delete.
 
-### LongTerm-SWE Multi-Language Code Drift Benchmark (20 Scenarios)
+### LongTerm-SWE Multi-Language Code Drift Benchmark (30 Scenarios)
 
 Evaluates whether memory systems detect when code evolves across multi-session horizons (`tests/eval_drift_benchmark.py`). In competitive benchmarks (such as MEX / LongTerm-SWE), baseline memory frameworks without code grounding scored 0% due to hallucinating obsolete function interfaces.
 
 | Language / Domain | Scenarios | Accuracy | Mean Latency | Token Cost |
 |---|:---:|:---:|:---:|:---:|
-| **Python AST (Body Logic, Signatures, Async, Types)** | 10 | 100% (10/10) | 2.37 ms | 0 tokens |
-| **TypeScript / JavaScript (Functions, Classes, Signatures)** | 4 | 100% (4/4) | 2.27 ms | 0 tokens |
-| **Go (Functions, Structs, Signatures)** | 3 | 100% (3/3) | 2.32 ms | 0 tokens |
-| **Cross-File / Pipeline Evolution** | 3 | 100% (3/3) | 2.33 ms | 0 tokens |
-| **Total** | **20** | **100% (20/20)** | **2.22 ms** | **$0.00 (0 tokens)** |
+| **Python AST (Body Logic, Signatures, Async, Types, Constants)** | 12 | 100% (12/12) | 2.54 ms | 0 tokens |
+| **TypeScript / JavaScript (Functions, Classes, Interfaces, Signatures)** | 5 | 100% (5/5) | 2.45 ms | 0 tokens |
+| **Go (Functions, Structs, Interfaces, Signatures)** | 4 | 100% (4/4) | 2.52 ms | 0 tokens |
+| **Rust (Functions, Structs, Signatures)** | 3 | 100% (3/3) | 2.47 ms | 0 tokens |
+| **Dart (Services, Models, Signatures)** | 3 | 100% (3/3) | 2.44 ms | 0 tokens |
+| **Cross-File / Pipeline Evolution** | 3 | 100% (3/3) | 2.51 ms | 0 tokens |
+| **Total** | **30** | **100% (30/30)** | **2.56 ms** | **$0.00 (0 tokens)** |
 
-- **Zero False Drift**: Whitespace, comment, and docstring modifications are normalized out via Python `ast` unparsing.
+- **Zero False Drift**: Whitespace, comment, and docstring modifications are normalized out via AST unparsing.
 - **Evidence Findings**: Instead of silent failures or heavy LLM verdicts, neutral evidence is emitted in recall responses when referenced code implementations drift.
 
-### LongMemEval 100-Session, 50-Query Benchmark
+### LongMemEval Multi-Session Retrieval Benchmark (100-Session & 250-Session Stress Suite)
 
-Evaluates long-term memory across 100 developer sessions spanning 6 enterprise projects (`tests/eval_longmemeval.py`):
+Evaluates long-term memory across 100 to 250 chronological developer sessions spanning 6 enterprise projects (`tests/eval_longmemeval.py`):
 
-| Evaluation Dimension | Description / Horizon | Scenarios | Accuracy |
-|---|---|:---:|:---:|
-| **1. Temporal Needle Retrieval** | Deep temporal extraction planted 5 to 95 sessions prior | 10 | 10/10 (100%) |
-| **2. Cascading Supersession** | Retrieving active updated decisions over superseded records | 10 | 10/10 (100%) |
-| **3. Multi-Session Multi-Hop** | Synthesizing disparate technical facts across distant sessions | 10 | 10/10 (100%) |
-| **4. Distractor Resistance** | Filtering out high-lexical noise records across projects | 10 | 10/10 (100%) |
-| **5. Temporal Event Ordering** | Reconstructing incident and migration milestones chronologically | 10 | 10/10 (100%) |
-| **Total** | **100 Chronological Sessions / 6 Projects** | **50** | **50/50 (100%)** |
+| Evaluation Dimension | Description / Horizon | 100-Session Suite | 250-Session Stress Suite | Accuracy |
+|---|---|:---:|:---:|:---:|
+| **1. Temporal Needle Retrieval** | Deep temporal extraction planted 5 to 245 sessions prior | 10 queries | 15 queries | 100% |
+| **2. Cascading Supersession** | Retrieving active updated decisions over superseded records | 10 queries | 10 queries | 100% |
+| **3. Multi-Session Multi-Hop** | Synthesizing disparate technical facts across distant sessions | 10 queries | 10 queries | 100% |
+| **4. Distractor Resistance** | Filtering out high-lexical noise records across projects | 10 queries | 10 queries | 100% |
+| **5. Temporal Event Ordering** | Reconstructing incident and migration milestones chronologically | 10 queries | 10 queries | 100% |
+| **Total** | **Chronological Developer Horizons** | **50 queries** | **55 queries** | **100%** |
 
-- **Ranking Quality**: **Recall@1: 86.0%** | **Recall@3: 100.0%** | **Recall@5: 100.0%** | **MRR: 0.923**
-- **Latency Distribution**: Mean **0.68 ms** | P95 **0.85 ms** | P99 **0.92 ms**
-- **Query Cost**: **$0.00 (0 tokens)**
+- **Standard 100-Session Suite**:
+  - **Ranking Quality**: **Recall@1: 86.0%** | **Recall@3: 100.0%** | **Recall@5: 100.0%** | **MRR: 0.923**
+  - **Latency Profile**: Mean **0.69 ms** | P95 **0.82 ms** | P99 **0.96 ms**
+  - **Query Cost**: **$0.00 (0 tokens)**
+- **Aggressive 250-Session Stress Suite (`--stress`)**:
+  - **Ranking Quality**: **Recall@1: 87.3%** | **Recall@3: 96.4%** | **Recall@5: 100.0%** | **MRR: 0.927**
+  - **Latency Profile**: Mean **0.80 ms** | P95 **1.09 ms** | P99 **2.22 ms**
+  - **Query Cost**: **$0.00 (0 tokens)**
 
 ### Real-World Production Scale Benchmark (13,988 Observations, 21 MB Vault)
 

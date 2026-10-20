@@ -1,10 +1,12 @@
 """Comprehensive LongTerm-SWE Multi-Language Code-Drift Benchmark for agi-memory.
 
-Stress tests drift detection across 20 distinct multi-language code evolution scenarios:
-- Python (functions, methods, classes, signatures, async conversions, constants, deleted files)
+Stress tests drift detection across 30 distinct multi-language code evolution scenarios:
+- Python (functions, methods, classes, signatures, async conversions, constants, deleted files, multiline signatures)
 - TypeScript / JavaScript (functions, classes, interfaces, signature shifts)
-- Go (functions, structs, signatures)
-- False-positive resistance (whitespace, formatting, docstrings, type annotations)
+- Go (functions, structs, interfaces, signatures)
+- Rust (functions, structs, signatures)
+- Dart (services, models, signatures)
+- False-positive resistance (whitespace, formatting, docstrings, type annotations across all languages)
 """
 import _isolate  # noqa: F401,E402  -- isolate paths before any memory imports
 import argparse
@@ -248,12 +250,125 @@ BENCHMARK_SCENARIOS = [
         "expected_drift": False,
         "expected_change": None,
         "expected_symbol": None
+    },
+    # --- Rust Scenarios ---
+    {
+        "id": "rs_21_function_signature_drift",
+        "file": "src/crypto/mod.rs",
+        "initial": "pub fn compute_sha256(data: &[u8]) -> Vec<u8> {\n    data.to_vec()\n}\n",
+        "title": "Rust ComputeSha256 Hash",
+        "text": "compute_sha256 hashes byte slice to vector.",
+        "updated": "pub fn compute_sha256(data: &[u8], salt: Option<&[u8]>) -> Vec<u8> {\n    data.to_vec()\n}\n",
+        "expected_drift": True,
+        "expected_change": "signature_drifted",
+        "expected_symbol": "compute_sha256"
+    },
+    {
+        "id": "rs_22_struct_type_removed",
+        "file": "src/models/account.rs",
+        "initial": "pub struct LegacyAccount {\n    pub id: u64,\n}\n",
+        "title": "Rust LegacyAccount Model",
+        "text": "LegacyAccount stores u64 ID in state.",
+        "updated": "pub struct ModernAccount {\n    pub uuid: String,\n}\n",
+        "expected_drift": True,
+        "expected_change": "removed",
+        "expected_symbol": "LegacyAccount"
+    },
+    {
+        "id": "rs_23_formatting_whitespace_negative",
+        "file": "src/utils/format.rs",
+        "initial": "pub fn format_text(s: &str) -> String {\n    // initial format\n    s.trim().to_string()\n}\n",
+        "title": "Rust Format Helper",
+        "text": "format_text trims string whitespace.",
+        "updated": "pub fn format_text(s: &str) -> String {\n    /// Expanded documentation comment.\n    /// Example: `format_text(\" hi \")`\n    s.trim().to_string()\n}\n",
+        "expected_drift": False,
+        "expected_change": None,
+        "expected_symbol": None
+    },
+    # --- Dart Scenarios ---
+    {
+        "id": "dart_24_function_signature_drift",
+        "file": "lib/services/api.dart",
+        "initial": "Future<String> fetchUser(String id) async {\n  return id;\n}\n",
+        "title": "Dart FetchUser Service",
+        "text": "fetchUser retrieves profile by string id.",
+        "updated": "Future<String> fetchUser(String id, {bool cache = true}) async {\n  return id;\n}\n",
+        "expected_drift": True,
+        "expected_change": "signature_drifted",
+        "expected_symbol": "fetchUser"
+    },
+    {
+        "id": "dart_25_class_removed",
+        "file": "lib/models/session.dart",
+        "initial": "class LegacySession {\n  final String token;\n  LegacySession(this.token);\n}\n",
+        "title": "Dart LegacySession Model",
+        "text": "LegacySession stores session token string.",
+        "updated": "class ModernSession {\n  final String jwt;\n  ModernSession(this.jwt);\n}\n",
+        "expected_drift": True,
+        "expected_change": "removed",
+        "expected_symbol": "LegacySession"
+    },
+    {
+        "id": "dart_26_formatting_negative",
+        "file": "lib/utils/format.dart",
+        "initial": "String formatAmount(double amount) {\n  return '\\$$amount';\n}\n",
+        "title": "Dart FormatAmount Helper",
+        "text": "formatAmount prepends dollar sign.",
+        "updated": "String formatAmount(double amount) {\n  // Currency formatter\n  return '\\$$amount';\n}\n",
+        "expected_drift": False,
+        "expected_change": None,
+        "expected_symbol": None
+    },
+    # --- Additional Python & TS Edge Cases ---
+    {
+        "id": "py_27_class_method_nested",
+        "file": "services/auth_mgr.py",
+        "initial": "class AuthManager:\n    def verify_credentials(self, u: str, p: str) -> bool:\n        return True\n",
+        "title": "AuthManager Credentials Verification",
+        "text": "AuthManager.verify_credentials checks username and password.",
+        "updated": "class AuthManager:\n    def verify_credentials(self, u: str, p: str, realm: str = 'default') -> bool:\n        return True\n",
+        "expected_drift": True,
+        "expected_change": "signature_drifted",
+        "expected_symbol": "verify_credentials"
+    },
+    {
+        "id": "py_28_multiline_signature",
+        "file": "network/client.py",
+        "initial": "def send_request(url: str, timeout: int = 10, retries: int = 3) -> dict:\n    return {'status': 200}\n",
+        "title": "Network Client Send Request",
+        "text": "send_request handles outgoing HTTP with retries.",
+        "updated": "def send_request(\n    url: str,\n    timeout: int = 10,\n    retries: int = 3,\n    verify_ssl: bool = True,\n) -> dict:\n    return {'status': 200}\n",
+        "expected_drift": True,
+        "expected_change": "signature_drifted",
+        "expected_symbol": "send_request"
+    },
+    {
+        "id": "ts_29_interface_drift",
+        "file": "src/types/config.ts",
+        "initial": "export interface ServerConfig {\n  port: number;\n}\n",
+        "title": "ServerConfig Interface",
+        "text": "ServerConfig defines port number.",
+        "updated": "export interface ServerConfigV2 {\n  port: number;\n}\n",
+        "expected_drift": True,
+        "expected_change": "removed",
+        "expected_symbol": "ServerConfig"
+    },
+    {
+        "id": "go_30_interface_drift",
+        "file": "pkg/storage/store.go",
+        "initial": "package storage\n\ntype Store interface {\n    Get(key string) string\n}\n",
+        "title": "Store Interface Contract",
+        "text": "Store interface defines Get method.",
+        "updated": "package storage\n\ntype StorageProvider interface {\n    Get(key string) string\n}\n",
+        "expected_drift": True,
+        "expected_change": "removed",
+        "expected_symbol": "Store"
     }
 ]
 
 
 def run_benchmark(db_path: Path, work_dir: Path):
-    proj = "swe-drift-20"
+    proj = "swe-drift-30"
     code_layer = CodeLayer(project=proj, db_path=db_path)
     session_layer = SessionLayer(project=proj, db_path=db_path)
 
@@ -348,13 +463,13 @@ def run_benchmark(db_path: Path, work_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="20-Scenario Multi-Language Code Drift Benchmark")
+    parser = argparse.ArgumentParser(description="30-Scenario Multi-Language Code Drift Benchmark")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         root = Path(tmp_dir)
-        db_path = root / "drift_eval_20.db"
+        db_path = root / "drift_eval_30.db"
         results, latencies = run_benchmark(db_path, root)
 
     passed_count = sum(1 for r in results if r["passed"])
@@ -373,7 +488,7 @@ def main():
         }, indent=2))
         sys.exit(0 if passed_count == total_count else 1)
 
-    print("\n=== LongTerm-SWE 20-Scenario Multi-Language Code-Drift Benchmark ===")
+    print("\n=== LongTerm-SWE 30-Scenario Multi-Language Code-Drift Benchmark ===")
     for r in results:
         status = "PASS" if r["passed"] else "FAIL"
         print(f"[{status}] {r['latency_ms']:5.2f}ms :: {r['id']:<32} | {r['file']}")

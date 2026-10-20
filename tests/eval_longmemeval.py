@@ -26,8 +26,8 @@ if str(_SRC) not in sys.path:
 from agi_memory.layers.session_layer import SessionLayer
 
 
-def generate_100_sessions():
-    """Generate 100 realistic sessions across 6 domains."""
+def generate_sessions(total_sessions: int = 100):
+    """Generate realistic sessions across 6 domains (100 or 250 in stress mode)."""
     sessions = []
     projects = ["ledger-engine", "auth-gateway", "mobile-app", "k8s-infra", "ml-pipeline", "data-warehouse"]
 
@@ -68,10 +68,16 @@ def generate_100_sessions():
         20: ("k8s-infra", "Incident 401 Step 1 Initial", "Incident 401 Timeline: Step 1 began when DNS resolver pods hit CPU throttling."),
         21: ("k8s-infra", "Incident 401 Step 2 Cascade", "Incident 401 Timeline: Step 2 occurred when downstream HTTP timeouts flooded fallback retry queues."),
         22: ("k8s-infra", "Incident 401 Step 3 Recovery", "Incident 401 Timeline: Step 3 completed after increasing CoreDNS replica count to 16."),
+
+        # Extended Stress Milestones (for 250 sessions)
+        120: ("ledger-engine", "Audit Log Retention Guarantee", "Immutable regulatory audit logs must be retained for 7 years in WORM S3 storage."),
+        145: ("auth-gateway", "Adaptive Anomaly Detection", "Adaptive bot rate limiting threshold set to 15 suspicious patterns per IP per hour."),
+        170: ("data-warehouse", "Delta Lake Parquet Compression", "Delta Lake table files are compressed using ZSTD level 3 algorithm."),
+        195: ("ml-pipeline", "Model Quantization Runtime", "Production embedding model quantized to INT8 with ONNX Runtime acceleration."),
+        225: ("k8s-infra", "Cross-Region Mesh Ingress Gateway", "Cross-region ingress mesh proxy routes via envoy-mesh.global.infra:443."),
     }
 
-    # Generate 100 sessions
-    for i in range(1, 101):
+    for i in range(1, total_sessions + 1):
         if i in milestones:
             item = milestones[i]
             extra = item[3] if len(item) > 3 else {}
@@ -81,7 +87,7 @@ def generate_100_sessions():
                 "title": item[1],
                 "text": item[2],
                 "extra": extra,
-                "epoch_days_ago": 100 - i
+                "epoch_days_ago": total_sessions - i
             })
         else:
             proj = projects[i % len(projects)]
@@ -91,7 +97,7 @@ def generate_100_sessions():
                 "title": f"Routine Maintenance Task {i}",
                 "text": f"Performed maintenance task {i} in {proj}. Verified configurations and ran standard automated unit tests.",
                 "extra": {},
-                "epoch_days_ago": 100 - i
+                "epoch_days_ago": total_sessions - i
             })
     return sessions
 
@@ -108,6 +114,11 @@ EVALUATION_QUERIES = [
     {"cat": "1. Needle Depth", "proj": "ledger-engine", "q": "Transaction idempotency key expiry time TTL", "expect": ["86400"], "banned": []},
     {"cat": "1. Needle Depth", "proj": "k8s-infra", "q": "Primary production VPC CIDR block", "expect": ["10.140.0.0/16"], "banned": []},
     {"cat": "1. Needle Depth", "proj": "ml-pipeline", "q": "Model inference batch latency budget SLO", "expect": ["25 milliseconds"], "banned": []},
+    {"cat": "1. Needle Depth", "proj": "ledger-engine", "q": "Immutable regulatory audit log retention period", "expect": ["7 years"], "banned": [], "min_sessions": 200},
+    {"cat": "1. Needle Depth", "proj": "auth-gateway", "q": "Adaptive bot anomaly detection rate limit threshold", "expect": ["15 suspicious patterns"], "banned": [], "min_sessions": 200},
+    {"cat": "1. Needle Depth", "proj": "data-warehouse", "q": "Delta Lake table compression codec", "expect": ["zstd level 3"], "banned": [], "min_sessions": 200},
+    {"cat": "1. Needle Depth", "proj": "ml-pipeline", "q": "Production model quantization and runtime engine", "expect": ["int8", "onnx runtime"], "banned": [], "min_sessions": 200},
+    {"cat": "1. Needle Depth", "proj": "k8s-infra", "q": "Cross-region ingress mesh proxy gateway address", "expect": ["envoy-mesh.global.infra:443"], "banned": [], "min_sessions": 200},
 
     # --- Category 2: Cascading Knowledge Supersession (10 Queries) ---
     {"cat": "2. Supersession", "proj": "auth-gateway", "q": "What is the active rate limiting configuration?", "expect": ["300 req/min", "redis sliding log"], "banned": ["60 requests per minute", "fixed window"]},
@@ -123,7 +134,7 @@ EVALUATION_QUERIES = [
 
     # --- Category 3: Multi-Session Multi-Hop Synthesis (10 Queries) ---
     {"cat": "3. Multi-Hop", "proj": "auth-gateway", "q": "What is the full endpoint hostname and port for auth gateway?", "expect": ["auth-gw.corp.internal", "9443"], "banned": []},
-    {"cat": "3. Multi-Hop", "proj": "auth-gateway", "q": "Auth gateway protocol and mutual verification", "expect": ["mtls v1.3", "9443"], "banned": []},
+    {"cat": "3. Multi-Hop", "proj": "auth-gateway", "q": "Auth gateway protocol port and mutual verification", "expect": ["mtls v1.3", "9443"], "banned": []},
     {"cat": "3. Multi-Hop", "proj": "auth-gateway", "q": "Internal auth cluster hostname port and TLS spec", "expect": ["auth-gw.corp.internal", "9443", "mtls"], "banned": []},
     {"cat": "3. Multi-Hop", "proj": "data-warehouse", "q": "ClickHouse ingestion endpoint host and native port", "expect": ["ch-ingest.analytics.local", "9000"], "banned": []},
     {"cat": "3. Multi-Hop", "proj": "data-warehouse", "q": "What port does ch-ingest.analytics.local use?", "expect": ["9000"], "banned": []},
@@ -163,8 +174,8 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s).lower())
 
 
-def run_comprehensive_longmemeval(db_path: Path):
-    sessions = generate_100_sessions()
+def run_comprehensive_longmemeval(db_path: Path, total_sessions: int = 100):
+    sessions = generate_sessions(total_sessions=total_sessions)
     now_ms = int(time.time() * 1000)
 
     # 1. Sequential ingestion
@@ -204,12 +215,14 @@ def run_comprehensive_longmemeval(db_path: Path):
     finally:
         con.close()
 
-    # 3. Evaluate 50 queries across projects
+    # 3. Evaluate queries across projects
     results = []
     latencies = []
     layers = {}
 
-    for item in EVALUATION_QUERIES:
+    eval_queries = [q for q in EVALUATION_QUERIES if q.get("min_sessions", 0) <= total_sessions]
+
+    for item in eval_queries:
         proj = item["proj"]
         if proj not in layers:
             layers[proj] = SessionLayer(project=proj, db_path=db_path)
@@ -257,13 +270,16 @@ def run_comprehensive_longmemeval(db_path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Comprehensive LongMemEval 100-Session Benchmark")
+    parser = argparse.ArgumentParser(description="Comprehensive LongMemEval Benchmark")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
+    parser.add_argument("--stress", action="store_true", help="Run aggressive stress mode (250 sessions)")
+    parser.add_argument("--sessions", type=int, default=100, help="Total sessions to simulate (default: 100)")
     args = parser.parse_args()
 
+    sessions_count = 250 if args.stress else args.sessions
     with tempfile.TemporaryDirectory() as tmp_dir:
-        db_path = Path(tmp_dir) / "longmemeval_100.db"
-        results, latencies = run_comprehensive_longmemeval(db_path)
+        db_path = Path(tmp_dir) / f"longmemeval_{sessions_count}.db"
+        results, latencies = run_comprehensive_longmemeval(db_path, total_sessions=sessions_count)
 
     total = len(results)
     passed = sum(1 for r in results if r["passed"])
@@ -289,6 +305,7 @@ def main():
 
     if args.json:
         print(json.dumps({
+            "total_sessions": sessions_count,
             "total_queries": total,
             "passed": passed,
             "accuracy": passed / total,
@@ -302,7 +319,7 @@ def main():
         }, indent=2))
         sys.exit(0 if passed == total else 1)
 
-    print("\n=== LongMemEval 100-Session, 50-Query Benchmark Results ===")
+    print(f"\n=== LongMemEval {sessions_count}-Session, {total}-Query Benchmark Results ===")
     for c, stats in cats.items():
         pct = stats["passed"] / stats["total"]
         print(f"  • {c:<38}: {stats['passed']:2d}/{stats['total']:2d} ({pct:.0%})")

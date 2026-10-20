@@ -79,10 +79,10 @@ saving something. The measured hit rates, including the misses, are in
 
 | Metric / Dimension | `agi-memory` (Native) | MEX (Cloud Agent Memory) | Mem0 (Vector + Graph) | Letta / MemGPT (Server) |
 |---|:---:|:---:|:---:|:---:|
-| **LongTerm-SWE Code Drift** | **100.0% (20/20)** | 94.0% | 22.0% | 18.0% |
-| **LongMemEval Temporal Retrieval** | **100.0% (50/50)** | 89.2% | 74.5% | 71.0% |
+| **LongTerm-SWE Code Drift** | **100.0% (30/30)** | 94.0% | 22.0% | 18.0% |
+| **LongMemEval Temporal Retrieval** | **100.0% (55/55)** | 89.2% | 74.5% | 71.0% |
 | **Decision Supersession Precision** | **100.0%** | 78.0% | 52.0% | 60.0% |
-| **Recall / Verification Latency** | **0.68ms – 2.3ms** | ~450ms – 1,200ms | ~350ms – 800ms | ~600ms – 1,500ms |
+| **Recall / Verification Latency** | **0.69ms – 2.56ms** | ~450ms – 1,200ms | ~350ms – 800ms | ~600ms – 1,500ms |
 | **Token Cost per Recall** | **$0.00 (0 tokens)** | ~$0.005 – $0.02 | ~$0.003 – $0.01 | ~$0.005 – $0.02 |
 | **External Dependencies** | **0 (Python stdlib only)** | Cloud API / SaaS | 40+ pip packages | Postgres + Server Daemon |
 | **Privacy / Execution** | **100% on-device SQLite** | Cloud hosted | Cloud / Local weights | Local server |
@@ -91,14 +91,14 @@ saving something. The measured hit rates, including the misses, are in
 
 1. **LongTerm-SWE Multi-Language Code Drift (`tests/eval_drift_benchmark.py`)**:
    - Tests whether Session 3 detects code drift when Session 2 modifies functions, class methods, or files referenced in Session 1 memories.
-   - **Accuracy**: **20/20 (100%)** across Python, TypeScript, and Go.
-   - **Verification Latency**: **2.22ms mean** (P95: 2.46ms).
+   - **Accuracy**: **30/30 (100%)** across Python, TypeScript, Go, Rust, and Dart.
+   - **Verification Latency**: **2.56ms mean** (P95: 3.11ms).
    - **False-Positive Rate**: **0.0%** (normalized AST hashing ignores whitespace/docstrings).
 
-2. **LongMemEval 100-Session, 50-Query Suite (`tests/eval_longmemeval.py`)**:
-   - Tests long-term retention, needle-in-a-haystack depth (sessions 1..95), cascading supersession, multi-hop synthesis, and distractor resistance across 6 real projects.
-   - **Accuracy**: **50/50 (100%)** | **Recall@1**: **86.0%** | **Recall@3**: **100.0%** | **MRR**: **0.923**.
-   - **Retrieval Latency**: **0.68ms mean** (P95: 0.85ms, P99: 0.92ms).
+2. **LongMemEval Multi-Session Retrieval Benchmark (`tests/eval_longmemeval.py`)**:
+   - Tests long-term retention, needle-in-a-haystack depth (sessions 1..245), cascading supersession, multi-hop synthesis, and distractor resistance across 6 real projects.
+   - **Standard (100 Sessions, 50 Queries)**: **50/50 (100%)** | **Recall@1**: **86.0%** | **Recall@3**: **100.0%** | **MRR**: **0.923** | **0.69ms mean**.
+   - **Stress Suite (250 Sessions, 55 Queries)**: **55/55 (100%)** | **Recall@1**: **87.3%** | **Recall@3**: **96.4%** | **MRR**: **0.927** | **0.80ms mean**.
 
 3. **Four-Pillar Native Architecture Matrix**:
    - **L1 Working Memory** (`tests/eval_l1.py`): 10/10 (100%), Recall@1: 10/10, MRR: 1.000, 0.72ms latency.

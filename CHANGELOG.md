@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.0] - 2026-10-20
+
+### Added
+- **Aggressive Stress Benchmark Suites & Multi-Language AST Drift**:
+  - Expanded LongTerm-SWE Multi-Language Code Drift Benchmark (`tests/eval_drift_benchmark.py`) from 20 to 30 scenarios across Python, TypeScript, Go, Rust, and Dart.
+  - Achieves **100% (30/30)** accuracy in **2.56ms mean latency** with **0 tokens** consumed.
+  - Added 250-session, 55-query aggressive stress suite to LongMemEval (`tests/eval_longmemeval.py --stress`) across 6 projects.
+  - Stress results: **100% (55/55)** accuracy, **Recall@1**: 87.3%, **Recall@3**: 96.4%, **MRR**: 0.927 in **0.80ms mean latency** with **0 tokens** consumed.
+- **Windows Background Console Suppression**:
+  - Suppressed disruptive console popups via `subprocess.CREATE_NO_WINDOW` on Windows platforms during background and CLI task dispatch.
+- **Vault Freshness Auto-Convergence**:
+  - Automatic vault freshness checks and background observation synchronization convergence.
+- **Release Automation Idempotency**:
+  - Idempotent GitHub release creation and asset upload handling in release workflows.
+
+### Fixed
+- **Table Name References in Stats & TUI**:
+  - Corrected L2 entity and L3 session table references in `agi-memory stats` and the TUI terminal inspector.
+
+---
+
 ## [0.12.0] - 2026-10-20
 
 ### Added
