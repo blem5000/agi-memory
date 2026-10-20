@@ -26,6 +26,16 @@ sys.path.insert(0, str(REPO / "src"))
 from agi_memory import hooks  # noqa: E402
 
 
+def _canon(path):
+    """Canonical form for comparing a native path with git's output.
+
+    Git prints forward slashes even on Windows while str(Path) uses
+    backslashes there, so a raw substring check can never match.
+    normcase is identity on POSIX, lowercase on Windows.
+    """
+    return os.path.normcase(os.fspath(path)).replace("\\", "/")
+
+
 class ReentrancyTests(unittest.TestCase):
     def test_pre_commit_is_a_no_op_inside_a_hook_chain(self):
         with mock.patch.dict(os.environ, {"AGI_MEMORY_HOOK": "1"}), \
@@ -106,13 +116,13 @@ class HermeticityTests(unittest.TestCase):
         # The control: without isolation, git walks up and finds the real repo.
         # Without this, the assertions below could pass vacuously.
         with tempfile.TemporaryDirectory(dir=str(REPO)) as inside:
-            self.assertIn(str(REPO), self._resolve(inside))
+            self.assertIn(_canon(REPO), _canon(self._resolve(inside)))
 
     def test_ceiling_naming_the_repo_root_blocks_discovery(self):
         with tempfile.TemporaryDirectory(dir=str(REPO)) as inside:
             got = self._resolve(inside, {**os.environ,
                                          "GIT_CEILING_DIRECTORIES": str(REPO)})
-        self.assertNotIn(str(REPO), got)
+        self.assertNotIn(_canon(REPO), _canon(got))
 
     def test_ceiling_naming_the_fixture_does_nothing(self):
         # Recorded because it is the value everyone tries first, and it does not
@@ -120,7 +130,7 @@ class HermeticityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=str(REPO)) as inside:
             got = self._resolve(inside, {**os.environ,
                                          "GIT_CEILING_DIRECTORIES": inside})
-        self.assertIn(str(REPO), got,
+        self.assertIn(_canon(REPO), _canon(got),
                       "if this ever starts working, the test above needs rethinking")
 
     def test_hooks_can_be_neutralised_for_a_fixture_commit(self):
@@ -132,7 +142,7 @@ class HermeticityTests(unittest.TestCase):
                            capture_output=True)
             marker = root / "HOOK_RAN"
             hook = root / ".git" / "hooks" / "pre-commit"
-            hook.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+            hook.write_text(f"#!/bin/sh\ntouch {marker.as_posix()}\n", encoding="utf-8")
             hook.chmod(0o755)
             ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
             subprocess.run(["git", *ident, "commit", "-q", "--allow-empty", "-m", "x"],

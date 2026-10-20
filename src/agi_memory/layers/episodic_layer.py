@@ -17,14 +17,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from agi_memory.config import DEFAULT_DB, get_default_db
+    from agi_memory.config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
     from agi_memory.layers.base import Hit, MemoryLayer, open_db, stem_terms
 except ImportError:
     try:
-        from ..config import DEFAULT_DB, get_default_db
+        from ..config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
         from .base import Hit, MemoryLayer, open_db, stem_terms
     except (ImportError, ValueError):
-        from config import DEFAULT_DB, get_default_db
+        from config import DEFAULT_DB, get_default_db, hidden_subprocess_kwargs
         # Script mode is how every lifecycle hook runs. Omitting open_db here
         # made EpisodicLayer() raise NameError inside the hooks' bare except,
         # so no real session was ever recorded.
@@ -75,7 +75,8 @@ def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Opti
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
     except Exception:
         pass
@@ -86,7 +87,8 @@ def _detect_git_info(cwd: Path | str | None = None) -> Tuple[Optional[str], Opti
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
     except Exception:
         pass
@@ -104,7 +106,8 @@ def _detect_git_touched_files(cwd: Path | str | None = None) -> List[str]:
             cwd=str(root),
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2
+            timeout=2,
+            **hidden_subprocess_kwargs()
         ).strip()
         for line in out.splitlines():
             line = line.strip()
@@ -125,9 +128,11 @@ def _detect_git_range(before: Optional[str], cwd: Path | str | None = None) -> T
     root = str(Path(cwd) if cwd else Path.cwd())
     try:
         log = subprocess.check_output(["git", "log", "--format=%h%x1f%s", f"{before}..HEAD"],
-                                      cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+                                      cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3,
+                                      **hidden_subprocess_kwargs())
         names = subprocess.check_output(["git", "diff", "--name-only", f"{before}..HEAD"],
-                                        cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3)
+                                        cwd=root, stderr=subprocess.DEVNULL, text=True, timeout=3,
+                                        **hidden_subprocess_kwargs())
     except Exception:
         return [], []  # not a repo, or `before` is gone after a history rewrite
     commits = [tuple(line.split("\x1f", 1)) for line in log.splitlines() if "\x1f" in line]

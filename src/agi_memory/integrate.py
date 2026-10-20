@@ -83,18 +83,56 @@ Use the `agi-memory` MCP server tools before making assumptions:
 """
 
 
+try:
+    from agi_memory.config import hidden_subprocess_kwargs
+except ImportError:
+    try:
+        from config import hidden_subprocess_kwargs
+    except ImportError:
+        def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:
+            return {}
+
+
+def _candidate_runs(path: str) -> bool:
+    """True when the candidate interpreter actually executes.
+
+    On Windows ``python3`` on PATH is often a Microsoft Store stub that
+    prints "Python was not found" and exits nonzero -- ``shutil.which``
+    cannot tell it apart from a real interpreter, so probe before trusting.
+    Only the PATH candidates are probed; explicit venv/prefix layouts are
+    trusted on existence, keeping hook paths free of extra spawns.
+    """
+    try:
+        r = subprocess.run([path, "-c", "import sys"],
+                           capture_output=True, timeout=15,
+                           **hidden_subprocess_kwargs())
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def detect_python() -> str:
     """Find the best python executable for the agi-memory MCP server."""
     venv_py = REPO_DIR / ".venv" / "bin" / "python"
     if venv_py.exists():
         return str(venv_py)
+    if os.name == "nt":
+        venv_win = REPO_DIR / ".venv" / "Scripts" / "python.exe"
+        if venv_win.exists():
+            return str(venv_win)
     if sys.prefix != sys.base_prefix:
         prefix_py = Path(sys.prefix) / "bin" / "python"
         if prefix_py.exists():
             return str(prefix_py)
-    which_py = shutil.which("python3") or shutil.which("python")
-    if which_py:
-        return which_py
+        if os.name == "nt":
+            for prefix_win in (Path(sys.prefix) / "Scripts" / "python.exe",
+                               Path(sys.prefix) / "python.exe"):
+                if prefix_win.exists():
+                    return str(prefix_win)
+    for _name in ("python3", "python"):
+        which_py = shutil.which(_name)
+        if which_py and _candidate_runs(which_py):
+            return which_py
     return sys.executable
 
 

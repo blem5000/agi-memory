@@ -36,25 +36,53 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from agi_memory.config import DATA_DIR, resolve_agent_id
+    from agi_memory.config import DATA_DIR, resolve_agent_id, hidden_subprocess_kwargs
 except ImportError:
-    from config import DATA_DIR, resolve_agent_id
+    from config import DATA_DIR, resolve_agent_id, hidden_subprocess_kwargs
 
 REPO_DIR = Path(__file__).resolve().parent
 DEFAULT_HOOKS_DIR = DATA_DIR / "hooks"
+
+
+def _candidate_runs(path: str) -> bool:
+    """True when the candidate interpreter actually executes.
+
+    On Windows ``python3`` on PATH is often a Microsoft Store stub that
+    prints "Python was not found" and exits nonzero -- ``shutil.which``
+    cannot tell it apart from a real interpreter, so probe before trusting.
+    Only the PATH candidates are probed; explicit venv/prefix layouts are
+    trusted on existence, keeping hook paths free of extra spawns.
+    """
+    try:
+        r = subprocess.run([path, "-c", "import sys"],
+                           capture_output=True, timeout=15,
+                           **hidden_subprocess_kwargs())
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 def detect_python() -> str:
     venv_py = REPO_DIR / ".venv" / "bin" / "python"
     if venv_py.exists():
         return str(venv_py)
+    if os.name == "nt":
+        venv_win = REPO_DIR / ".venv" / "Scripts" / "python.exe"
+        if venv_win.exists():
+            return str(venv_win)
     if sys.prefix != sys.base_prefix:
         prefix_py = Path(sys.prefix) / "bin" / "python"
         if prefix_py.exists():
             return str(prefix_py)
-    which_py = shutil.which("python3") or shutil.which("python")
-    if which_py:
-        return which_py
+        if os.name == "nt":
+            for prefix_win in (Path(sys.prefix) / "Scripts" / "python.exe",
+                               Path(sys.prefix) / "python.exe"):
+                if prefix_win.exists():
+                    return str(prefix_win)
+    for _name in ("python3", "python"):
+        which_py = shutil.which(_name)
+        if which_py and _candidate_runs(which_py):
+            return which_py
     return sys.executable
 
 
@@ -207,7 +235,19 @@ def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> No
     except Exception:
         pass
 
-    if not pinned_blocks and not recent_hits and not episodic_recap:
+    # Freshness probe: instant cached answer, network (if due) in background.
+    # Never blocks session start and never raises.
+    fresh_line = ""
+    try:
+        try:
+            from agi_memory import sync as _sync
+        except ImportError:
+            import sync as _sync
+        fresh_line = _sync.format_freshness_line(_sync.ensure_fresh_background())
+    except Exception:
+        pass
+
+    if not pinned_blocks and not recent_hits and not episodic_recap and not fresh_line:
         return
 
     output: List[str] = []
@@ -231,6 +271,10 @@ def hook_session_start(project: Optional[str] = None, reuse: bool = False) -> No
         output.append("\n## Top Project Precedents")
         for h in recent_hits:
             output.append(f"- {_clip(h)}")
+
+    if fresh_line:
+        output.append("\n## Vault Sync")
+        output.append(f"- {fresh_line}")
 
     output.append("\n*Query `memory_recall` (epistemic), `memory_timeline` (episodic), or `code_structure` (code graph) for additional context.*")
     output.append(f"<!-- AGENT_MEMORY_STARTUP_CONTEXT_END -->")

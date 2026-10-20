@@ -805,11 +805,10 @@ def run_mcp_server():
                             "capabilities": {"tools": {}},
                             "serverInfo": {"name": "agi-memory", "version": __version__},
                             "instructions": SERVER_INSTRUCTIONS})
-                # Trigger initial background pull to sync multi-device memories
+                # Interval-gated background freshness check: pulls when the vault
+                # is behind, pushes when ahead. Returns instantly.
                 try:
-                    import threading
-                    t = threading.Thread(target=sync.sync, kwargs={"push": False, "pull": True}, daemon=True)
-                    t.start()
+                    sync.ensure_fresh_background()
                 except Exception:
                     pass
             elif method == "ping":
