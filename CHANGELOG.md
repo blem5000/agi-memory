@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.1] - 2026-10-20
+
+### Fixed
+- **Flicker-Free Terminal Loop in `mxterm` & Multiplexers (`agi-tui`)**:
+  - Replaced 4Hz polling redraw loop with an event-driven loop that redraws exclusively on keypress, terminal resize, or 1-second clock updates. Zero writes to stdout when idle.
+  - Added alternate screen buffer (`\033[?1049h` / `\033[?1049l`) to prevent scrollback pollution and buffer re-rendering thrashing.
+  - Added terminal-line clear escape (`\033[K`) to line ends to cleanly erase characters when resizing.
+- **Content Responsiveness Across Narrow & Split Displays**:
+  - Bound total line length to `max(min(cols - 3, 140), 28)` (strictly `< cols`) to eliminate line wrapping and subsequent viewport scrolling jitter.
+  - Bound vertical lines strictly below `rows` (`content_rows = max(rows - 10, 2)`).
+  - Added adaptive tab bar abbreviations (`[1] Health & Metrics` -> `[1] Health` -> `[1] Heal` -> `[1]`) based on terminal width.
+  - Added narrow-mode toggle (`compact_view = "list" | "detail"`) in Explorer (Tab 2) triggered by `[Enter]` and `[Esc]`, eliminating 70-line vertical blowup on screens narrower than 80 columns.
+  - Responsive layout for Knowledge Graph, Code AST, and Episodic Sessions tabs.
+
+---
+
 ## [0.14.0] - 2026-10-20
 
 ### Added

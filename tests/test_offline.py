@@ -2287,6 +2287,20 @@ with tempfile.TemporaryDirectory() as doc_tmp:
     assert len(hits_legacy) >= 1, "Expected search with project='agent-memory' to recall observations saved under 'agi-memory'"
     assert "TLS" in hits_legacy[0].text
 
+    # 16. TUI Responsive Geometries & Non-Overflow Bounds
+    from agi_memory.tui import TerminalInspector, _strip_ansi
+    for (test_cols, test_rows) in [(100, 30), (80, 24), (60, 20), (50, 16), (36, 14)]:
+        os.environ["COLUMNS"] = str(test_cols)
+        os.environ["LINES"] = str(test_rows)
+        for tab_idx in [1, 2, 3, 4, 5, 6]:
+            tui_inst = TerminalInspector(db_path=alias_db)
+            tui_inst.active_tab = tab_idx
+            rendered_buf = tui_inst.render()
+            r_lines = rendered_buf.split("\n")
+            assert len(r_lines) < test_rows, f"Tab {tab_idx} line count {len(r_lines)} >= rows {test_rows}"
+            max_visual_w = max(len(_strip_ansi(l)) for l in r_lines)
+            assert max_visual_w < test_cols, f"Tab {tab_idx} max width {max_visual_w} >= cols {test_cols}"
+
 print("layers OK")
 print("integrate tests OK")
 print("graph tests OK")

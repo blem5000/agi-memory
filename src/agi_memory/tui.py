@@ -42,7 +42,7 @@ except ImportError:
     from config import get_default_db, get_vault_dir
     from layers.base import open_db
     from vault import deduplicate_and_compact
-    __version__ = "0.14.0"
+    __version__ = "0.14.1"
 
 # ANSI styles & 16-color / 256-color palette
 ESC = "\033["
@@ -75,6 +75,8 @@ CURSOR_HOME = f"{ESC}H"
 CLEAR_LINE = f"{ESC}K"
 HIDE_CURSOR = f"{ESC}?25l"
 SHOW_CURSOR = f"{ESC}?25h"
+ENTER_ALT_SCREEN = f"{ESC}?1049h"
+EXIT_ALT_SCREEN = f"{ESC}?1049l"
 
 # Unicode box drawing
 BOX_HORIZ = "═"
@@ -160,22 +162,51 @@ def _read_single_key(timeout: float = 0.25) -> str:
         return ""
 
 
+ANSI_REGEX = re.compile(r"\033\[[0-9;]*[a-zA-Z]")
+
+
 def _strip_ansi(text: str) -> str:
     """Strip ANSI escape sequences for accurate visual length calculation."""
-    return re.sub(r"\033\[[0-9;]*[a-zA-Z]", "", text)
+    return ANSI_REGEX.sub("", text)
+
+
+def _fit_text(text: str, max_width: int) -> str:
+    """Truncate string to max_width visual characters without breaking ANSI escapes."""
+    if max_width <= 0:
+        return ""
+    if len(_strip_ansi(text)) <= max_width:
+        return text
+    parts = ANSI_REGEX.split(text)
+    codes = ANSI_REGEX.findall(text)
+    out = []
+    visible_count = 0
+    for i, part in enumerate(parts):
+        for ch in part:
+            if visible_count >= max_width:
+                break
+            out.append(ch)
+            visible_count += 1
+        if i < len(codes) and visible_count < max_width:
+            out.append(codes[i])
+        elif visible_count >= max_width:
+            break
+    return "".join(out) + RESET
+
+
+def _pad_cell(text: str, width: int, fill: str = " ") -> str:
+    """Fit text to exact width and pad with fill, ANSI-safe."""
+    if width <= 0:
+        return ""
+    fitted = _fit_text(text, width)
+    vis_len = len(_strip_ansi(fitted))
+    if vis_len < width:
+        fitted = fitted + (fill * (width - vis_len))
+    return fitted
 
 
 def _pad_line(text: str, width: int, fill: str = " ") -> str:
-    """Pad or truncate string to exact visual width, preserving ANSI sequences."""
-    visible = _strip_ansi(text)
-    vis_len = len(visible)
-    if vis_len > width:
-        # truncate while preserving end reset
-        raw_cut = text[:width + 20]
-        while len(_strip_ansi(raw_cut)) > width and len(raw_cut) > 0:
-            raw_cut = raw_cut[:-1]
-        return raw_cut + RESET
-    return text + (fill * (width - vis_len))
+    """Alias for backwards compatibility and single-line cell padding."""
+    return _pad_cell(text, width, fill)
 
 
 def _type_badge(obs_type: str) -> str:
@@ -467,6 +498,7 @@ class TerminalInspector:
         self.show_help = False
         self.active_project = "All Projects"
         self.cached_projects: List[str] = ["All Projects"]
+        self.compact_view: str = "list"  # "list" or "detail" for narrow geometry
 
         self.flash_message: Optional[str] = None
         self.flash_until: float = 0.0
@@ -494,23 +526,45 @@ class TerminalInspector:
         lines = []
         border = BOX_HORIZ * width
         lines.append(f"{CYAN}{BOLD}{BOX_TOP_LEFT}{border}{BOX_TOP_RIGHT}{RESET}")
-        title = f" ⚡ agi-memory god-mode inspector v{__version__} "
-        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if width >= 60:
+            title = f" ⚡ agi-memory god-mode inspector v{__version__} "
+        elif width >= 40:
+            title = f" ⚡ agi-memory v{__version__} "
+        else:
+            title = " ⚡ agi-tui "
+
+        if width >= 65:
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elif width >= 45:
+            now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        else:
+            now_str = ""
+
         head_sp = width - len(title) - len(now_str) - 2
-        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET} {BOLD}{title}{RESET}{' ' * max(head_sp, 0)}{DIM}{now_str}{RESET} {CYAN}{BOLD}{BOX_VERT}{RESET}")
+        title_content = f" {BOLD}{title}{RESET}{' ' * max(head_sp, 0)}{DIM}{now_str}{RESET} "
+        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(title_content, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         lines.append(f"{CYAN}{BOLD}{BOX_MID_LEFT}{border}{BOX_MID_RIGHT}{RESET}")
 
         # Tabs bar (6 tabs)
         tab_chunks = []
         for i, name in enumerate(self.TAB_NAMES, start=1):
-            short_name = name.split()[0]
-            if i == self.active_tab:
-                tab_chunks.append(f"{REVERSE}{BOLD} [{i}] {name} {RESET}")
+            if width >= 86:
+                lbl = f"[{i}] {name}" if i == self.active_tab else f"[{i}] {name.split()[0]}"
+            elif width >= 64:
+                lbl = f"[{i}] {name.split()[0]}"
+            elif width >= 46:
+                lbl = f"[{i}] {name[:4]}"
             else:
-                tab_chunks.append(f"{DIM}[{i}] {short_name}{RESET}")
+                lbl = f"[{i}]"
+
+            if i == self.active_tab:
+                tab_chunks.append(f"{REVERSE}{BOLD} {lbl} {RESET}")
+            else:
+                tab_chunks.append(f"{DIM}{lbl}{RESET}")
         tab_bar = "  ".join(tab_chunks)
-        sp_tabs = width - len(_strip_ansi(tab_bar)) - 2
-        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}  {tab_bar}{' ' * max(sp_tabs, 0)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+        tab_content = f"  {tab_bar}"
+        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(tab_content, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         lines.append(f"{CYAN}{BOLD}{BOX_MID_LEFT}{border}{BOX_MID_RIGHT}{RESET}")
         return lines
 
@@ -522,25 +576,27 @@ class TerminalInspector:
         # Flash message or default status line
         if self.input_mode == "search":
             search_line = f"  {YELLOW}{BOLD}Search (FTS5):{RESET} {self.search_buffer}█ {DIM}[Enter: Commit | Esc: Cancel]{RESET}"
-            sp_search = width - len(_strip_ansi(search_line))
-            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{search_line}{' ' * max(sp_search, 0)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(search_line, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         elif self.flash_message and time.time() < self.flash_until:
             color = BRIGHT_YELLOW if "⏳" in self.flash_message else (BRIGHT_GREEN if "✓" in self.flash_message else BRIGHT_CYAN)
             msg_str = f"  {color}{BOLD}{self.flash_message}{RESET}"
-            sp_msg = width - len(_strip_ansi(msg_str))
-            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{msg_str}{' ' * max(sp_msg, 0)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(msg_str, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         else:
             proj_badge = f"{DIM}Project:{RESET} {BRIGHT_CYAN}{self.active_project}{RESET}"
             search_badge = f" | {DIM}Search:{RESET} {YELLOW}'{self.search_query}'{RESET}" if self.search_query else ""
             status_line = f"  {proj_badge}{search_badge}"
-            sp_stat = width - len(_strip_ansi(status_line))
-            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{status_line}{' ' * max(sp_stat, 0)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+            lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(status_line, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
 
         # Shortcuts footer
         lines.append(f"{CYAN}{BOLD}{BOX_MID_LEFT}{border}{BOX_MID_RIGHT}{RESET}")
-        keys_help = " [1-6] Tabs  [j/k/↑/↓] Scroll  [/] Search  [o] Project  [p] Prune  [c] Compact  [?] Help  [q] Quit "
-        sp_footer = width - len(keys_help)
-        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{BOLD}{keys_help}{RESET}{' ' * max(sp_footer, 0)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+        if width < 56:
+            keys_help = " [1-6] Tabs  [j/k] Move  [/] Find  [?] Help  [q] Quit "
+        elif width < 80:
+            keys_help = " [1-6] Tabs  [j/k] Scroll  [/] Search  [o] Proj  [?] Help  [q] Quit "
+        else:
+            keys_help = " [1-6] Tabs  [j/k/↑/↓] Scroll  [/] Search  [o] Project  [p] Prune  [c] Compact  [?] Help  [q] Quit "
+        footer_content = f"{BOLD}{keys_help}{RESET}"
+        lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(footer_content, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         lines.append(f"{CYAN}{BOLD}{BOX_BOT_LEFT}{border}{BOX_BOT_RIGHT}{RESET}")
         return lines
 
@@ -595,10 +651,66 @@ class TerminalInspector:
         self.selected_index = max(0, min(self.selected_index, len(obs_list) - 1))
         selected_obs = obs_list[self.selected_index]
 
-        # Geometry for split pane
-        use_split = width >= 84
-        left_w = min(max(int(width * 0.44), 36), width - 36) if use_split else width - 4
-        right_w = (width - left_w - 3) if use_split else width - 4
+        use_split = width >= 80
+        if not use_split:
+            # Narrow geometry: togglable list or detail view
+            if self.compact_view == "detail":
+                detail_lines = []
+                detail = fetch_observation_detail(self.db_path, selected_obs["id"])
+                detail_lines.append(f"{BOLD}Observation #{selected_obs['id']}: {selected_obs.get('title', 'Untitled')}{RESET} {DIM}[Enter: List]{RESET}")
+                detail_lines.append(THIN_HORIZ * max(width - 4, 10))
+                if detail:
+                    detail_lines.append(f"  {DIM}Project:{RESET}    {BRIGHT_CYAN}{detail.get('project') or 'default'}{RESET}")
+                    detail_lines.append(f"  {DIM}Category:{RESET}   {detail.get('type') or 'general'}  |  {DIM}Created:{RESET} {detail.get('created_at') or 'unknown'}")
+                    if detail.get("concepts"):
+                        detail_lines.append(f"  {DIM}Concepts:{RESET}   {YELLOW}{detail.get('concepts')}{RESET}")
+                    if detail.get("files_modified"):
+                        detail_lines.append(f"  {DIM}Modified:{RESET}   {detail.get('files_modified')}")
+                    detail_lines.append("")
+                    narrative = detail.get("narrative") or detail.get("subtitle") or "No narrative recorded."
+                    detail_lines.append(f"  {BOLD}Narrative:{RESET}")
+                    for line in narrative.splitlines()[:max(max_lines - 12, 3)]:
+                        detail_lines.append(f"    {line[:max(width - 8, 10)]}")
+                    raw_facts = detail.get("facts")
+                    if raw_facts:
+                        detail_lines.append(f"  {BOLD}Key Technical Facts:{RESET}")
+                        try:
+                            facts_list = json.loads(raw_facts) if isinstance(raw_facts, str) and raw_facts.startswith("[") else [raw_facts]
+                            for fact in facts_list[:3]:
+                                detail_lines.append(f"    • {str(fact).strip()[:max(width - 10, 10)]}")
+                        except Exception:
+                            detail_lines.append(f"    • {str(raw_facts)[:max(width - 10, 10)]}")
+                    if detail.get("superseded_by"):
+                        detail_lines.append(f"  {RED}{BOLD}⚠ Superseded by observation #{detail['superseded_by']}{RESET}")
+                return detail_lines[:max_lines]
+            else:
+                list_lines = []
+                header_text = f"Memories ({len(obs_list)}) {DIM}[Enter: Details]{RESET}"
+                if self.search_query:
+                    header_text += f" [/{self.search_query}]"
+                list_lines.append(f"{BOLD}{header_text}{RESET}")
+                list_lines.append(THIN_HORIZ * max(width - 4, 10))
+                visible_rows = max(max_lines - 3, 4)
+                start_idx = max(0, min(self.selected_index - visible_rows // 2, len(obs_list) - visible_rows))
+                end_idx = min(start_idx + visible_rows, len(obs_list))
+                for idx in range(start_idx, end_idx):
+                    item = obs_list[idx]
+                    is_sel = (idx == self.selected_index)
+                    prefix = f"{BRIGHT_CYAN}❯{RESET} " if is_sel else "  "
+                    badge = _type_badge(item.get("type", ""))
+                    obs_id = f"#{item['id']}".ljust(5)
+                    title = (item.get("title") or "Untitled").strip()
+                    row_str = f"{prefix}{obs_id} {badge} {title}"
+                    if is_sel:
+                        row_str = f"{REVERSE}{BOLD}{_pad_cell(row_str, width - 4)}{RESET}"
+                    else:
+                        row_str = _pad_cell(row_str, width - 4)
+                    list_lines.append(row_str)
+                return list_lines[:max_lines]
+
+        # Geometry for split pane (width >= 80)
+        left_w = min(max(int(width * 0.44), 36), width - 36)
+        right_w = width - left_w - 1
 
         # Build Left Pane (Observation list)
         left_lines = []
@@ -606,7 +718,7 @@ class TerminalInspector:
         if self.search_query:
             header_text += f" [Search: '{self.search_query}']"
         left_lines.append(f"{BOLD}{header_text}{RESET}")
-        left_lines.append(THIN_HORIZ * (left_w - 2))
+        left_lines.append(THIN_HORIZ * max(left_w - 2, 10))
 
         # Viewport scrolling
         visible_rows = max(max_lines - 4, 8)
@@ -622,9 +734,9 @@ class TerminalInspector:
             title = (item.get("title") or "Untitled").strip()
             row_str = f"{prefix}{obs_id} {badge} {title}"
             if is_sel:
-                row_str = f"{REVERSE}{BOLD}{_pad_line(row_str, left_w - 2)}{RESET}"
+                row_str = f"{REVERSE}{BOLD}{_pad_cell(row_str, left_w - 2)}{RESET}"
             else:
-                row_str = _pad_line(row_str, left_w - 2)
+                row_str = _pad_cell(row_str, left_w - 2)
             left_lines.append(row_str)
 
         # Build Right Pane (Detail view of selected observation)
@@ -632,7 +744,7 @@ class TerminalInspector:
         detail = fetch_observation_detail(self.db_path, selected_obs["id"])
         if detail:
             right_lines.append(f"{BOLD}Observation #{detail['id']}: {detail.get('title', 'Untitled')}{RESET}")
-            right_lines.append(THIN_HORIZ * (right_w - 2))
+            right_lines.append(THIN_HORIZ * max(right_w - 2, 10))
             right_lines.append(f"  {DIM}Project:{RESET}    {BRIGHT_CYAN}{detail.get('project') or 'default'}{RESET}")
             right_lines.append(f"  {DIM}Category:{RESET}   {detail.get('type') or 'general'}  |  {DIM}Created:{RESET} {detail.get('created_at') or 'unknown'}")
             if detail.get("concepts"):
@@ -643,12 +755,10 @@ class TerminalInspector:
 
             right_lines.append(f"  {BOLD}Narrative & Synthesis:{RESET}")
             narrative = detail.get("narrative") or detail.get("subtitle") or "No narrative recorded."
-            # Wrap narrative text
             for line in narrative.splitlines()[:5]:
-                right_lines.append(f"    {line[:right_w - 6]}")
+                right_lines.append(f"    {line[:max(right_w - 6, 10)]}")
             right_lines.append("")
 
-            # Extracted Facts
             raw_facts = detail.get("facts")
             if raw_facts:
                 right_lines.append(f"  {BOLD}Key Technical Facts:{RESET}")
@@ -656,9 +766,9 @@ class TerminalInspector:
                     facts_list = json.loads(raw_facts) if isinstance(raw_facts, str) and raw_facts.startswith("[") else [raw_facts]
                     for fact in facts_list[:4]:
                         clean_fact = str(fact).strip()
-                        right_lines.append(f"    • {clean_fact[:right_w - 8]}")
+                        right_lines.append(f"    • {clean_fact[:max(right_w - 8, 10)]}")
                 except Exception:
-                    right_lines.append(f"    • {str(raw_facts)[:right_w - 8]}")
+                    right_lines.append(f"    • {str(raw_facts)[:max(right_w - 8, 10)]}")
 
             if detail.get("superseded_by"):
                 right_lines.append(f"  {RED}{BOLD}⚠ Superseded by observation #{detail['superseded_by']}{RESET}")
@@ -667,18 +777,13 @@ class TerminalInspector:
 
         # Combine panes
         combined = []
-        if use_split:
-            total_rows = max(len(left_lines), len(right_lines))
-            for r in range(total_rows):
-                l_str = left_lines[r] if r < len(left_lines) else ""
-                r_str = right_lines[r] if r < len(right_lines) else ""
-                l_pad = _pad_line(l_str, left_w)
-                r_pad = _pad_line(r_str, right_w)
-                combined.append(f"{l_pad}{DIM}{THIN_VERT}{RESET}{r_pad}")
-        else:
-            combined.extend(left_lines)
-            combined.append(THIN_HORIZ * (width - 4))
-            combined.extend(right_lines)
+        total_rows = max(len(left_lines), len(right_lines))
+        for r in range(total_rows):
+            l_str = left_lines[r] if r < len(left_lines) else ""
+            r_str = right_lines[r] if r < len(right_lines) else ""
+            l_pad = _pad_cell(l_str, left_w)
+            r_pad = _pad_cell(r_str, right_w)
+            combined.append(f"{l_pad}{DIM}{THIN_VERT}{RESET}{r_pad}")
         return combined
 
     def render_tab3_graph(self, width: int, max_lines: int) -> List[str]:
@@ -686,44 +791,57 @@ class TerminalInspector:
         entities = fetch_graph_entities(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
         relations = fetch_graph_relations(self.db_path, limit=25)
 
-        use_split = width >= 84
-        left_w = min(max(int(width * 0.44), 36), width - 36) if use_split else width - 4
-        right_w = (width - left_w - 3) if use_split else width - 4
+        use_split = width >= 80
+        if not use_split:
+            lines = []
+            lines.append(f"{BOLD}Knowledge Entities ({len(entities)}){RESET}")
+            lines.append(THIN_HORIZ * max(width - 4, 10))
+            for ent in entities[:max(max_lines // 2, 2)]:
+                name = ent["name"][:max(width - 24, 8)]
+                e_type = ent.get("entity_type", "concept")[:8]
+                edges = ent.get("edge_count", 0)
+                lines.append(f"  {BRIGHT_MAGENTA}●{RESET} {name} {DIM}({e_type}, {edges} rels){RESET}")
+            lines.append(THIN_HORIZ * max(width - 4, 10))
+            lines.append(f"{BOLD}Active Semantic Relations ({len(relations)}){RESET}")
+            for rel in relations[:max(max_lines - len(lines) - 1, 2)]:
+                src = rel["source"][:12]
+                r_type = rel["relation"][:10]
+                tgt = rel["target"][:12]
+                lines.append(f"  {BRIGHT_CYAN}{src}{RESET} -[{YELLOW}{r_type}{RESET}]-> {BRIGHT_CYAN}{tgt}{RESET}")
+            return lines[:max_lines]
+
+        left_w = min(max(int(width * 0.44), 36), width - 36)
+        right_w = width - left_w - 1
 
         left_lines = []
         left_lines.append(f"{BOLD}Knowledge Entities ({len(entities)}){RESET}")
-        left_lines.append(THIN_HORIZ * (left_w - 2))
+        left_lines.append(THIN_HORIZ * max(left_w - 2, 10))
         for ent in entities[:max_lines - 4]:
-            name = ent["name"][:left_w - 18]
+            name = ent["name"][:max(left_w - 18, 8)]
             e_type = ent.get("entity_type", "concept")[:8]
             edges = ent.get("edge_count", 0)
             row = f"  {BRIGHT_MAGENTA}●{RESET} {name} {DIM}({e_type}, {edges} rels){RESET}"
-            left_lines.append(_pad_line(row, left_w - 2))
+            left_lines.append(_pad_cell(row, left_w - 2))
 
         right_lines = []
         right_lines.append(f"{BOLD}Active Semantic Relations ({len(relations)}){RESET}")
-        right_lines.append(THIN_HORIZ * (right_w - 2))
+        right_lines.append(THIN_HORIZ * max(right_w - 2, 10))
         for rel in relations[:max_lines - 4]:
             src = rel["source"][:16]
             r_type = rel["relation"][:14]
             tgt = rel["target"][:16]
             edge_str = f"  {BRIGHT_CYAN}{src}{RESET} -[{YELLOW}{r_type}{RESET}]-> {BRIGHT_CYAN}{tgt}{RESET}"
-            right_lines.append(_pad_line(edge_str, right_w - 2))
+            right_lines.append(_pad_cell(edge_str, right_w - 2))
             if rel.get("fact"):
-                fact_str = f"    {DIM}Fact:{RESET} {rel['fact'][:right_w - 12]}"
-                right_lines.append(_pad_line(fact_str, right_w - 2))
+                fact_str = f"    {DIM}Fact:{RESET} {rel['fact'][:max(right_w - 12, 8)]}"
+                right_lines.append(_pad_cell(fact_str, right_w - 2))
 
         combined = []
-        if use_split:
-            total_rows = max(len(left_lines), len(right_lines))
-            for r in range(total_rows):
-                l_str = left_lines[r] if r < len(left_lines) else ""
-                r_str = right_lines[r] if r < len(right_lines) else ""
-                combined.append(f"{_pad_line(l_str, left_w)}{DIM}{THIN_VERT}{RESET}{_pad_line(r_str, right_w)}")
-        else:
-            combined.extend(left_lines)
-            combined.append(THIN_HORIZ * (width - 4))
-            combined.extend(right_lines)
+        total_rows = max(len(left_lines), len(right_lines))
+        for r in range(total_rows):
+            l_str = left_lines[r] if r < len(left_lines) else ""
+            r_str = right_lines[r] if r < len(right_lines) else ""
+            combined.append(f"{_pad_cell(l_str, left_w)}{DIM}{THIN_VERT}{RESET}{_pad_cell(r_str, right_w)}")
         return combined
 
     def render_tab4_code(self, width: int, max_lines: int) -> List[str]:
@@ -731,19 +849,28 @@ class TerminalInspector:
         symbols = fetch_code_symbols(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
         lines = []
         lines.append(f"  {BOLD}Indexed Code Symbols ({len(symbols)} tracked){RESET}")
-        lines.append(f"  {THIN_HORIZ * (width - 6)}")
+        lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
         if not symbols:
             lines.append("  (No code symbols indexed yet. Run 'code_index' MCP tool in your repository.)")
             return lines
 
-        lines.append(f"  {'KIND'.ljust(8)} {'NAME'.ljust(26)} {'FILE & RANGE'.ljust(32)} {'AST HASH'}")
-        lines.append(f"  {THIN_HORIZ * (width - 6)}")
-        for sym in symbols[:max_lines - 6]:
-            k = sym.get("kind", "symbol")[:7]
-            n = sym.get("name", "")[:25]
-            f = f"{sym.get('file_path', '')}:{sym.get('start_line', 0)}"[:30]
-            h = (sym.get("ast_hash") or "unhashed")[:12]
-            lines.append(f"  {BRIGHT_GREEN}{k.ljust(8)}{RESET} {BOLD}{n.ljust(26)}{RESET} {DIM}{f.ljust(32)}{RESET} {YELLOW}{h}{RESET}")
+        if width >= 80:
+            lines.append(f"  {'KIND'.ljust(8)} {'NAME'.ljust(26)} {'FILE & RANGE'.ljust(32)} {'AST HASH'}")
+            lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
+            for sym in symbols[:max(max_lines - 6, 2)]:
+                k = sym.get("kind", "symbol")[:7]
+                n = sym.get("name", "")[:25]
+                f = f"{sym.get('file_path', '')}:{sym.get('start_line', 0)}"[:30]
+                h = (sym.get("ast_hash") or "unhashed")[:12]
+                lines.append(f"  {BRIGHT_GREEN}{k.ljust(8)}{RESET} {BOLD}{n.ljust(26)}{RESET} {DIM}{f.ljust(32)}{RESET} {YELLOW}{h}{RESET}")
+        else:
+            lines.append(f"  {'KIND'.ljust(6)} {'NAME'.ljust(18)} {'FILE'}")
+            lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
+            for sym in symbols[:max(max_lines - 6, 2)]:
+                k = sym.get("kind", "sym")[:6]
+                n = sym.get("name", "")[:18]
+                f = Path(sym.get("file_path", "")).name[:max(width - 28, 8)]
+                lines.append(f"  {BRIGHT_GREEN}{k.ljust(6)}{RESET} {BOLD}{n.ljust(18)}{RESET} {DIM}{f}{RESET}")
         return lines
 
     def render_tab5_sessions(self, width: int, max_lines: int) -> List[str]:
@@ -751,20 +878,30 @@ class TerminalInspector:
         sessions = fetch_sessions(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
         lines = []
         lines.append(f"  {BOLD}Episodic Developer Sessions ({len(sessions)} sessions){RESET}")
-        lines.append(f"  {THIN_HORIZ * (width - 6)}")
+        lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
         if not sessions:
             lines.append("  (No episodic sessions recorded yet.)")
             return lines
 
-        lines.append(f"  {'STATUS'.ljust(12)} {'BRANCH / DURATION'.ljust(24)} {'GOAL / SUMMARY'}")
-        lines.append(f"  {THIN_HORIZ * (width - 6)}")
-        for s in sessions[:max_lines - 6]:
-            outcome = s.get("outcome") or s.get("status") or "active"
-            color = BRIGHT_GREEN if outcome in ("completed", "success") else (BRIGHT_YELLOW if outcome == "active" else RED)
-            st_badge = f"{color}[{outcome[:9]}]{RESET}".ljust(20)
-            branch = f"{s.get('git_branch') or 'main'} ({int(s.get('duration_seconds') or 0)}s)"[:22]
-            goal = (s.get("goal") or s.get("summary") or "General coding session").replace("\n", " ")[:width - 45]
-            lines.append(f"  {st_badge} {DIM}{branch.ljust(24)}{RESET} {goal}")
+        if width >= 80:
+            lines.append(f"  {'STATUS'.ljust(12)} {'BRANCH / DURATION'.ljust(24)} {'GOAL / SUMMARY'}")
+            lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
+            for s in sessions[:max(max_lines - 6, 2)]:
+                outcome = s.get("outcome") or s.get("status") or "active"
+                color = BRIGHT_GREEN if outcome in ("completed", "success") else (BRIGHT_YELLOW if outcome == "active" else RED)
+                st_badge = f"{color}[{outcome[:9]}]{RESET}".ljust(20)
+                branch = f"{s.get('git_branch') or 'main'} ({int(s.get('duration_seconds') or 0)}s)"[:22]
+                goal = (s.get("goal") or s.get("summary") or "General coding session").replace("\n", " ")[:max(width - 45, 10)]
+                lines.append(f"  {st_badge} {DIM}{branch.ljust(24)}{RESET} {goal}")
+        else:
+            lines.append(f"  {'STATUS'.ljust(10)} {'GOAL / SUMMARY'}")
+            lines.append(f"  {THIN_HORIZ * max(width - 6, 10)}")
+            for s in sessions[:max(max_lines - 6, 2)]:
+                outcome = s.get("outcome") or s.get("status") or "active"
+                color = BRIGHT_GREEN if outcome in ("completed", "success") else (BRIGHT_YELLOW if outcome == "active" else RED)
+                st_badge = f"{color}[{outcome[:6]}]{RESET}".ljust(16)
+                goal = (s.get("goal") or s.get("summary") or "Session").replace("\n", " ")[:max(width - 20, 10)]
+                lines.append(f"  {st_badge} {goal}")
         return lines
 
     def render_tab6_audit(self, width: int, max_lines: int) -> List[str]:
@@ -836,8 +973,10 @@ class TerminalInspector:
     def render(self) -> str:
         """Render full screen dashboard buffer."""
         cols, rows = shutil.get_terminal_size((80, 24))
-        width = max(cols - 2, 70)
-        content_rows = max(rows - 10, 10)
+        # Total line width is width + 2 (border left and right).
+        # We ensure width + 2 is strictly <= cols - 1 to eliminate autowrap in mxterm/tmux.
+        width = max(min(cols - 3, 140), 28)
+        content_rows = max(rows - 10, 2)
 
         screen_lines = []
         screen_lines.extend(self.render_header(width))
@@ -862,18 +1001,17 @@ class TerminalInspector:
         for i in range(content_rows):
             if i < len(tab_lines):
                 line_content = tab_lines[i]
-                padded = _pad_line(f" {line_content}", width)
-                screen_lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{padded}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+                padded = _pad_cell(f" {line_content}", width)
+                screen_lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{padded}{CYAN}{BOLD}{BOX_VERT}{RESET}{CLEAR_LINE}")
             else:
-                screen_lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{' ' * width}{CYAN}{BOLD}{BOX_VERT}{RESET}")
+                screen_lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{' ' * width}{CYAN}{BOLD}{BOX_VERT}{RESET}{CLEAR_LINE}")
 
         screen_lines.extend(self.render_footer(width))
         return "\n".join(screen_lines)
 
     def run_interactive(self) -> None:
-        """Run interactive ANSI dashboard loop."""
-        sys.stdout.write(HIDE_CURSOR)
-        sys.stdout.write(CLEAR_SCREEN)
+        """Run interactive ANSI dashboard loop with zero flicker and alternate screen buffer."""
+        sys.stdout.write(f"{ENTER_ALT_SCREEN}{HIDE_CURSOR}{CLEAR_SCREEN}")
         sys.stdout.flush()
 
         old_settings = None
@@ -888,17 +1026,45 @@ class TerminalInspector:
                 old_settings = None
 
         try:
+            last_size = shutil.get_terminal_size()
+            last_sec = int(time.time())
             needs_clear = True
-            while True:
-                prefix = CLEAR_SCREEN if needs_clear else CURSOR_HOME
-                needs_clear = False
-                output = f"{prefix}{self.render()}"
-                sys.stdout.write(output)
-                sys.stdout.flush()
+            should_redraw = True
 
-                key = _read_single_key(timeout=0.25)
+            while True:
+                now = time.time()
+                curr_sec = int(now)
+                curr_size = shutil.get_terminal_size()
+
+                # Detect terminal resize
+                if curr_size != last_size:
+                    last_size = curr_size
+                    needs_clear = True
+                    should_redraw = True
+
+                # 1-second clock tick
+                if curr_sec != last_sec:
+                    last_sec = curr_sec
+                    should_redraw = True
+
+                # Flash message expiration
+                if self.flash_message and now >= self.flash_until:
+                    self.flash_message = None
+                    should_redraw = True
+
+                if should_redraw:
+                    prefix = CLEAR_SCREEN if needs_clear else CURSOR_HOME
+                    needs_clear = False
+                    output = f"{prefix}{self.render()}"
+                    sys.stdout.write(output)
+                    sys.stdout.flush()
+                    should_redraw = False
+
+                key = _read_single_key(timeout=0.1)
                 if not key:
                     continue
+
+                should_redraw = True
 
                 # Search input mode handling
                 if self.input_mode == "search":
@@ -922,9 +1088,15 @@ class TerminalInspector:
                 elif k in ("esc",):
                     if self.show_help:
                         self.show_help = False
+                    elif self.compact_view == "detail":
+                        self.compact_view = "list"
                     elif self.search_query:
                         self.search_query = ""
                         self.set_flash("Cleared search filter.", duration=1.5)
+                elif k in ("enter", "\r", "\n"):
+                    cols, _ = shutil.get_terminal_size((80, 24))
+                    if cols < 80 and self.active_tab == 2:
+                        self.compact_view = "detail" if self.compact_view == "list" else "list"
                 elif k in ("?", "f1"):
                     self.show_help = not self.show_help
                 elif k in ("1", "2", "3", "4", "5", "6"):
@@ -932,6 +1104,7 @@ class TerminalInspector:
                     if self.active_tab != target_tab:
                         self.active_tab = target_tab
                         self.selected_index = 0
+                        self.compact_view = "list"
                         needs_clear = True
                         if target_tab == 6 and self.cached_audit is None:
                             self.set_flash("⏳ Scanning memory store for audit hygiene...", duration=5.0)
@@ -941,11 +1114,13 @@ class TerminalInspector:
                 elif k in ("tab", "right", "l"):
                     self.active_tab = (self.active_tab % len(self.TAB_NAMES)) + 1
                     self.selected_index = 0
+                    self.compact_view = "list"
                     needs_clear = True
                     self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
                 elif k in ("shift_tab", "left", "h"):
                     self.active_tab = len(self.TAB_NAMES) if self.active_tab == 1 else (self.active_tab - 1)
                     self.selected_index = 0
+                    self.compact_view = "list"
                     needs_clear = True
                     self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
                 elif k in ("up", "k"):
@@ -1007,7 +1182,7 @@ class TerminalInspector:
                     termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
                 except Exception:
                     pass
-            sys.stdout.write(CLEAR_SCREEN + SHOW_CURSOR)
+            sys.stdout.write(f"{SHOW_CURSOR}{EXIT_ALT_SCREEN}")
             sys.stdout.flush()
 
     def run_once(self) -> None:
