@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.0] - 2026-10-20
+
+### Added
+- **God-Mode Terminal Inspector & Cognitive Dashboard (`agi-tui` / `agi-memory tui`)**:
+  - **6 Dedicated Cognitive Tabs**:
+    - `[1] Health & Metrics`: Complete 4-pillar overview, vault health, storage size, top project distributions, and empirical citation metrics.
+    - `[2] Memory Explorer (Split-Pane)`: Split-pane browser with left-side list and right-side inspection pane (narrative, facts, concepts, modified files).
+    - `[3] Knowledge Graph`: Top connected entities, active semantic relations, and factual edge assertions.
+    - `[4] Code Graph & AST`: Real-time symbol table, AST drift hashes, and caller hierarchy.
+    - `[5] Sessions & WIP`: Chronological agent sessions, outcomes (`completed`/`unknown`/`failed`), duration, git branch, and open WIP items.
+    - `[6] Store Hygiene & Audit`: Instant scanner for synthetic fixtures, zero-signal noise records, unconfirmed observations, with one-key prune (`[p]`) and compact (`[c]`).
+  - **Live In-TUI Search (`/`)**: Instant SQLite FTS5 search directly inside the TUI with real-time filtering as you type.
+  - **Project Filter Cycling (`o`)**: Cycle active project view across all indexed projects with one keystroke.
+  - **Vim & Lazygit Ergonomics**: Support for `j`/`k`/`g`/`G` scrolling, arrow keys, `Tab`/`Shift-Tab`, and `Enter`.
+  - **Modal Help Overlay (`?`)**: Full floating keyboard shortcuts cheatsheet available on demand.
+  - **Zero-Dependency Native Architecture**: Built 100% on Python standard library without curses, rich, or textual.
+
+---
+
 ## [0.13.2] - 2026-10-20
 
 ### Fixed
