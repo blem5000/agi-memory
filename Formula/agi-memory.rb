@@ -4,7 +4,7 @@ class AgiMemory < Formula
   desc "Turnkey zero-dependency four-pillar cognitive memory framework for AI coding assistants"
   homepage "https://github.com/kdbhalala/agi-memory"
   url "https://github.com/kdbhalala/agi-memory/archive/refs/tags/v0.14.0.tar.gz"
-  sha256 "a50529ea30d535e48a5d5e47b71d6c1a38c773af61ebf62ac93701e4983538aa"
+  sha256 "4c2153cb3467014604bd8edcdd84ac3becb35e1d5f205cb0b4cb1a4af1dc52ce"
   license "MIT"
   head "https://github.com/kdbhalala/agi-memory.git", branch: "main"
 
