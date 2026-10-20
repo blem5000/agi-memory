@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.13.2] - 2026-10-20
+
+### Fixed
+- **Terminal Inspector Responsiveness & Feedback (`agi-tui`)**:
+  - Maintained stable terminal `cbreak` mode across session loop to eliminate `tcsetattr` terminal attribute thrashing and stutter in multiplexers (`mxterm`, `tmux`).
+  - Added immediate visual loading states (`⏳`) and instant stdout flushes for prune (`[p]`), compact (`[c]`), and refresh (`[r]`) operations before executing long-running background tasks.
+  - Added support for Arrow keys (`←`, `→`) and `Tab` to navigate smoothly between tabs.
+  - Added instant visual feedback when pressing unmapped keys so the user sees input acknowledgment and available action shortcuts.
+  - Replaced full-screen buffer clears on regular refresh ticks with cursor repositioning (`\033[H`) to prevent screen flicker.
+
+---
+
 ## [0.13.1] - 2026-10-20
 
 ### Fixed

@@ -53,8 +53,8 @@ HIDE_CURSOR = f"{ESC}?25l"
 SHOW_CURSOR = f"{ESC}?25h"
 
 
-def _read_single_key(timeout: float = 0.1) -> str:
-    """Read a single keypress without blocking indefinitely."""
+def _read_single_key(timeout: float = 0.25) -> str:
+    """Read a single key or escape sequence without blocking indefinitely."""
     if not sys.stdin.isatty():
         return ""
 
@@ -65,6 +65,17 @@ def _read_single_key(timeout: float = 0.1) -> str:
             while time.time() - start_t < timeout:
                 if msvcrt.kbhit():
                     ch = msvcrt.getch()
+                    if ch in (b"\x00", b"\xe0"):
+                        ch2 = msvcrt.getch()
+                        if ch2 == b"K":
+                            return "left"
+                        elif ch2 == b"M":
+                            return "right"
+                        elif ch2 == b"H":
+                            return "up"
+                        elif ch2 == b"P":
+                            return "down"
+                        return ""
                     try:
                         return ch.decode("utf-8")
                     except UnicodeDecodeError:
@@ -76,22 +87,31 @@ def _read_single_key(timeout: float = 0.1) -> str:
 
     # Unix / macOS
     import select
-    import termios
-    import tty
 
     fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
     try:
-        tty.setcbreak(fd)
-        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
-        if rlist:
-            ch = sys.stdin.read(1)
-            return ch
+        rlist, _, _ = select.select([fd], [], [], timeout)
+        if not rlist:
+            return ""
+        ch = os.read(fd, 1).decode("utf-8", errors="ignore")
+        if ch == "\x1b":
+            # Check for escape sequence (arrow keys)
+            rlist2, _, _ = select.select([fd], [], [], 0.05)
+            if rlist2:
+                seq = os.read(fd, 2).decode("utf-8", errors="ignore")
+                if seq == "[D":
+                    return "left"
+                elif seq == "[C":
+                    return "right"
+                elif seq == "[A":
+                    return "up"
+                elif seq == "[B":
+                    return "down"
+                return f"esc{seq}"
+            return "esc"
+        return ch
     except Exception:
         return ""
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ""
 
 
 def gather_stats(db_path: Path, vault_dir: Path) -> Dict[str, Any]:
@@ -240,13 +260,14 @@ class TerminalInspector:
         # Flash message or status
         lines.append(f"{CYAN}{BOLD}║{RESET}")
         if self.flash_message and time.time() < self.flash_until:
-            lines.append(f"{CYAN}{BOLD}║{RESET}  {GREEN}{BOLD}{self.flash_message}{RESET}")
+            color = YELLOW if "⏳" in self.flash_message else (GREEN if "✓" in self.flash_message else CYAN)
+            lines.append(f"{CYAN}{BOLD}║{RESET}  {color}{BOLD}{self.flash_message}{RESET}")
         else:
             lines.append(f"{CYAN}{BOLD}║{RESET}  {DIM}Press keys below to navigate or run hygiene actions.{RESET}")
 
         # Footer
         lines.append(f"{CYAN}{BOLD}╠{border}╣{RESET}")
-        keys_help = f" [1] Stats  [2] Audit  [p] Prune Candidates  [c] Compact Vault  [r] Refresh  [q] Quit "
+        keys_help = " [1] Stats  [2] Audit  [p] Prune  [c] Compact  [r] Refresh  [Tab/←/→] Switch  [q] Quit "
         sp_footer = width - len(keys_help)
         lines.append(f"{CYAN}{BOLD}║{RESET}{BOLD}{keys_help}{RESET}{' ' * max(sp_footer, 0)}{CYAN}{BOLD}║{RESET}")
         lines.append(f"{CYAN}{BOLD}╚{border}╝{RESET}")
@@ -255,10 +276,26 @@ class TerminalInspector:
     def run_interactive(self) -> None:
         """Run interactive ANSI dashboard loop."""
         sys.stdout.write(HIDE_CURSOR)
+        sys.stdout.write(CLEAR_SCREEN)
         sys.stdout.flush()
+
+        old_settings = None
+        if os.name != "nt" and sys.stdin.isatty():
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            try:
+                old_settings = termios.tcgetattr(fd)
+                tty.setcbreak(fd)
+            except Exception:
+                old_settings = None
+
         try:
+            needs_clear = True
             while True:
-                output = f"{CLEAR_SCREEN}{self.render()}"
+                prefix = CLEAR_SCREEN if needs_clear else "\033[H"
+                needs_clear = False
+                output = f"{prefix}{self.render()}"
                 sys.stdout.write(output)
                 sys.stdout.flush()
 
@@ -267,27 +304,60 @@ class TerminalInspector:
                     continue
 
                 k = key.lower()
-                if k == "q" or key == "\x03":  # q or Ctrl+C
+                if k in ("q", "esc", "\x03"):  # q, esc or Ctrl+C
                     break
-                elif k == "1":
-                    self.active_tab = 1
-                elif k == "2":
-                    self.active_tab = 2
-                    self.cached_audit = None  # trigger rescan
+                elif k in ("1", "left"):
+                    if self.active_tab != 1:
+                        self.active_tab = 1
+                        needs_clear = True
+                        self.set_flash("► Switched to [1] Health & Metrics", duration=1.5)
+                elif k in ("2", "right"):
+                    if self.active_tab != 2:
+                        self.active_tab = 2
+                        needs_clear = True
+                        if self.cached_audit is None:
+                            self.set_flash("⏳ Scanning memory store for audit hygiene...", duration=5.0)
+                            sys.stdout.write(f"{CLEAR_SCREEN}{self.render()}")
+                            sys.stdout.flush()
+                        self.cached_audit = None
+                        self.set_flash("► Switched to [2] Audit & Drift Hygiene", duration=1.5)
+                elif k == "\t":
+                    self.active_tab = 2 if self.active_tab == 1 else 1
+                    needs_clear = True
+                    tab_name = "Health & Metrics" if self.active_tab == 1 else "Audit & Drift Hygiene"
+                    self.set_flash(f"► Switched to [{self.active_tab}] {tab_name}", duration=1.5)
                 elif k == "r":
+                    self.set_flash("⏳ Refreshing memory statistics...", duration=5.0)
+                    sys.stdout.write(f"\033[H{self.render()}")
+                    sys.stdout.flush()
                     self.cached_audit = None
-                    self.set_flash("✓ Refreshed metrics and scan.")
+                    self.set_flash("✓ Refreshed metrics and scan.", duration=3.0)
                 elif k == "p":
+                    self.set_flash("⏳ Pruning synthetic fixtures and noise records...", duration=5.0)
+                    sys.stdout.write(f"\033[H{self.render()}")
+                    sys.stdout.flush()
                     auditor = MemoryAudit(self.db_path, self.vault_dir)
                     res = auditor.prune_candidates(("test_fixtures", "noise_records"))
                     self.cached_audit = None
-                    self.set_flash(f"✓ Pruned {res['pruned_direct']} records; compacted {res['observations_compacted']}.")
+                    self.set_flash(f"✓ Pruned {res['pruned_direct']} records; compacted {res['observations_compacted']}.", duration=4.0)
                 elif k == "c":
+                    self.set_flash("⏳ Compacting memory vault deduplication...", duration=5.0)
+                    sys.stdout.write(f"\033[H{self.render()}")
+                    sys.stdout.flush()
                     res = deduplicate_and_compact(vault_dir=self.vault_dir, session_db=self.db_path)
                     self.cached_audit = None
-                    self.set_flash(f"✓ Vault compacted ({res.get('observations_pruned', 0)} pruned).")
+                    self.set_flash(f"✓ Vault compacted ({res.get('observations_pruned', 0)} pruned).", duration=4.0)
+                else:
+                    disp = key if (len(key) == 1 and key.isprintable()) else repr(key)
+                    self.set_flash(f"Key '{disp}' pressed (no action). Available: [1] Stats  [2] Audit  [p] Prune  [c] Compact  [r] Refresh  [q] Quit", duration=2.5)
         finally:
-            sys.stdout.write(SHOW_CURSOR + "\n")
+            if old_settings is not None and os.name != "nt":
+                import termios
+                try:
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+                except Exception:
+                    pass
+            sys.stdout.write(CLEAR_SCREEN + SHOW_CURSOR)
             sys.stdout.flush()
 
     def run_once(self) -> None:
