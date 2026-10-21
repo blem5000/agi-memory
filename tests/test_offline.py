@@ -2301,6 +2301,52 @@ with tempfile.TemporaryDirectory() as doc_tmp:
             max_visual_w = max(len(_strip_ansi(l)) for l in r_lines)
             assert max_visual_w < test_cols, f"Tab {tab_idx} max width {max_visual_w} >= cols {test_cols}"
 
+    # 17. Windows console-window suppression
+    # CREATE_NO_WINDOW is ignored by Windows when DETACHED_PROCESS or
+    # CREATE_NEW_CONSOLE is set as well: the child then gets a console of
+    # its own, i.e. the empty cmd window that flashed on every OpenCode
+    # start when the MCP server spawned its background freshness check.
+    from agi_memory.config import hidden_subprocess_kwargs as _hsk
+    if os.name == "nt":
+        import subprocess as _hsk_sp
+        _no_window = getattr(_hsk_sp, "CREATE_NO_WINDOW", 0)
+        _detached = getattr(_hsk_sp, "DETACHED_PROCESS", 0)
+        _new_console = getattr(_hsk_sp, "CREATE_NEW_CONSOLE", 0)
+        _group = getattr(_hsk_sp, "CREATE_NEW_PROCESS_GROUP", 0)
+        _flags = _hsk(_detached | _new_console | _group).get("creationflags", 0)
+        assert _no_window and (_flags & _no_window), "CREATE_NO_WINDOW must survive"
+        assert not (_flags & _detached), "DETACHED_PROCESS cancels CREATE_NO_WINDOW"
+        assert not (_flags & _new_console), "CREATE_NEW_CONSOLE cancels CREATE_NO_WINDOW"
+        assert (_flags & _group), "CREATE_NEW_PROCESS_GROUP must survive"
+        # The two detached-spawn sites must not ask for a console of their own.
+        for _spawn_file in ("sync.py", "hooks.py"):
+            _spawn_src = (Path(__file__).resolve().parent.parent
+                          / "src" / "agi_memory" / _spawn_file).read_text(encoding="utf-8")
+            _code = "\n".join(_ln.split("#", 1)[0] for _ln in _spawn_src.splitlines())
+            for _usage in ('subprocess.DETACHED_PROCESS', 'getattr(subprocess, "DETACHED_PROCESS"',
+                           "getattr(subprocess, 'DETACHED_PROCESS'"):
+                assert _usage not in _code, \
+                    f"{_spawn_file} still requests DETACHED_PROCESS (new console -> window flash)"
+        # Runtime proof: a child started with these flags has NO console
+        # attached, so there is no window to flash.
+        _probe = "import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())"
+        _child = _sp.run([sys.executable, "-c", _probe], capture_output=True, text=True,
+                         **_hsk(_group))
+        assert _child.stdout.strip() == "0", \
+            f"child still owns a console (GetConsoleWindow={_child.stdout.strip()!r})"
+
+    # 18. The MCP server must run on a windowless interpreter on Windows
+    # A console application launched by an assistant's client allocates a
+    # console of its own; that console is the empty cmd window next to the
+    # editor. pythonw.exe is the same interpreter without a console.
+    from agi_memory.integrate import windowless_python as _wlp
+    if os.name == "nt":
+        _wl = _wlp(sys.executable)
+        assert _wl.lower().endswith("pythonw.exe"), f"expected pythonw.exe, got {_wl}"
+        assert _wlp(_wl) == _wl, "windowless_python must be idempotent"
+    else:
+        assert _wlp(sys.executable) == sys.executable, "POSIX must be left alone"
+
 print("layers OK")
 print("integrate tests OK")
 print("graph tests OK")
@@ -2316,4 +2362,5 @@ print("cold-start bootstrap & observability CLI OK")
 print("episodic session timeline & recaps OK")
 print("structural code graph AST & impact analysis OK")
 print("documentation parity, tool coverage & alias bridging OK")
+print("windows console-window suppression OK")
 

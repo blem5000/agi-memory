@@ -802,10 +802,12 @@ def _spawn_detached_check(vault_dir: Path | str | None = None) -> bool:
         if _cwd:
             kwargs["cwd"] = _cwd
         if os.name == "nt":
-            creationflags = getattr(subprocess, "DETACHED_PROCESS", 0)
-            creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            # CREATE_NO_WINDOW is what actually suppresses the conhost/cmd
-            # popup; DETACHED_PROCESS alone still flashes one on Win10/11.
+            # CREATE_NO_WINDOW is what suppresses the conhost/cmd popup, and
+            # Windows ignores it when DETACHED_PROCESS is also set (the child
+            # would then get a console of its own -- the empty window we are
+            # trying to get rid of). CREATE_NEW_PROCESS_GROUP keeps the child
+            # in its own process group without giving it a console.
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             kwargs.update(hidden_subprocess_kwargs(creationflags))
         else:
             kwargs["start_new_session"] = True

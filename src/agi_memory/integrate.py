@@ -110,6 +110,32 @@ def _candidate_runs(path: str) -> bool:
         return False
 
 
+def windowless_python(py_path: str) -> str:
+    """The windowless twin of a Windows interpreter (``pythonw.exe``).
+
+    An MCP server is a console application. When an assistant's client starts
+    it, Windows allocates a console for it unless the client hides it, and
+    that console shows up as an empty cmd window next to the assistant --
+    on every start, for as long as the MCP server runs. ``pythonw.exe`` is
+    the same interpreter without a console, so the server runs windowless.
+
+    Only the MCP server command uses this. Hooks and CLI output keep the
+    normal interpreter: they write to the terminal on purpose.
+    """
+    if os.name != "nt":
+        return py_path
+    try:
+        p = Path(py_path)
+        if p.stem.lower() in ("pythonw", "pythonw3"):
+            return py_path
+        candidate = p.with_name("pythonw.exe")
+        if candidate.exists():
+            return str(candidate)
+    except Exception:
+        pass
+    return py_path
+
+
 def detect_python() -> str:
     """Find the best python executable for the agi-memory MCP server."""
     venv_py = REPO_DIR / ".venv" / "bin" / "python"
@@ -1236,8 +1262,15 @@ def cmd_install(args: argparse.Namespace) -> None:
     print(f"Using Server: {srv_path}")
     print(f"Target scope: {scope}\n")
 
+    # The MCP server is launched as a console application; on Windows that
+    # allocates a console and shows an empty cmd window next to the
+    # assistant. pythonw.exe is the same interpreter without a console.
+    mcp_py = windowless_python(py_path)
+    if mcp_py != py_path:
+        print(f"MCP server interpreter: {mcp_py} (windowless)\n")
+
     for tool in selected:
-        success, msg = tool.install(py_path, srv_path, scope=scope)
+        success, msg = tool.install(mcp_py, srv_path, scope=scope)
         status_icon = "✓" if success else "✗"
         print(f"[{status_icon}] {tool.display_name:22}: {msg}")
 

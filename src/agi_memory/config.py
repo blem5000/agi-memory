@@ -235,12 +235,22 @@ def hidden_subprocess_kwargs(extra_creationflags: int = 0) -> dict:
     console. ``CREATE_NO_WINDOW`` + ``STARTF_USESHOWWINDOW``/``SW_HIDE``
     keeps the child fully in background. No-op dict on POSIX.
     Stdlib only, safe to spread into run/call/check_output/Popen.
+
+    ``DETACHED_PROCESS`` and ``CREATE_NEW_CONSOLE`` are STRIPPED here on
+    purpose: Windows documents ``CREATE_NO_WINDOW`` as ignored when either
+    is also set. A child started that way gets a brand-new console of its
+    own -- an empty window flashing on every spawn, which is exactly what
+    the flag combination was supposed to prevent. ``CREATE_NEW_PROCESS_GROUP``
+    is kept: it separates the child's process group without giving it a
+    console.
     """
     if os.name != "nt":
         return {}
     kwargs: dict = {}
     try:
         creationflags = int(extra_creationflags or 0)
+        for conflicting in ("DETACHED_PROCESS", "CREATE_NEW_CONSOLE"):
+            creationflags &= ~int(getattr(subprocess, conflicting, 0) or 0)
         creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         kwargs["creationflags"] = creationflags
     except Exception:

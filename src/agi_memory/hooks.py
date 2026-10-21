@@ -633,10 +633,11 @@ def _spawn_detached(args: List[str]) -> None:
     env["AGI_MEMORY_HOOK"] = "1"
     extra: Dict[str, Any] = {}
     if os.name == "nt":
-        flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
-                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-        # CREATE_NO_WINDOW is what actually suppresses the conhost/cmd
-        # popup; DETACHED_PROCESS alone still flashes one on Win10/11.
+        # CREATE_NO_WINDOW suppresses the conhost/cmd popup, and Windows
+        # ignores it when DETACHED_PROCESS is also set -- the child would get
+        # a console of its own, i.e. the empty window this is meant to avoid.
+        # CREATE_NEW_PROCESS_GROUP detaches the process group instead.
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         extra = hidden_subprocess_kwargs(flags)
         flags = extra.pop("creationflags", flags)
     else:
