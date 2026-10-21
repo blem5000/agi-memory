@@ -42,7 +42,7 @@ except ImportError:
     from config import get_default_db, get_vault_dir
     from layers.base import open_db
     from vault import deduplicate_and_compact
-    __version__ = "0.14.1"
+    __version__ = "0.14.2"
 
 # ANSI styles & 16-color / 256-color palette
 ESC = "\033["
@@ -420,6 +420,45 @@ def fetch_graph_relations(db_path: Path, entity_name: Optional[str] = None, limi
     return results
 
 
+def fetch_entity_neighborhood(db_path: Path, entity_name: str, limit: int = 15) -> Dict[str, Any]:
+    """Fetch structured neighborhood topology (inbound, outbound, facts) for a focal entity."""
+    if not db_path.exists() or not entity_name:
+        return {"inbound": [], "outbound": [], "facts": []}
+    con = open_db(db_path, readonly=True)
+    inbound = []
+    outbound = []
+    facts = []
+    try:
+        con.row_factory = sqlite3.Row
+        # Inbound edges: source points to entity_name
+        cur = con.execute("""
+            SELECT id, source AS neighbor, relation, fact, project
+            FROM graph_edges
+            WHERE target = ? AND is_active = 1
+            ORDER BY id DESC LIMIT ?
+        """, (entity_name, limit))
+        inbound = [dict(r) for r in cur.fetchall()]
+
+        # Outbound edges: entity_name points to target
+        cur = con.execute("""
+            SELECT id, target AS neighbor, relation, fact, project
+            FROM graph_edges
+            WHERE source = ? AND is_active = 1
+            ORDER BY id DESC LIMIT ?
+        """, (entity_name, limit))
+        outbound = [dict(r) for r in cur.fetchall()]
+
+        for edge in inbound + outbound:
+            f = (edge.get("fact") or "").strip()
+            if f and f not in facts:
+                facts.append(f)
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+    return {"inbound": inbound, "outbound": outbound, "facts": facts}
+
+
 def fetch_code_symbols(db_path: Path, project: Optional[str] = None, limit: int = 35) -> List[Dict[str, Any]]:
     """Fetch indexed code symbols and signatures."""
     if not db_path.exists():
@@ -499,6 +538,9 @@ class TerminalInspector:
         self.active_project = "All Projects"
         self.cached_projects: List[str] = ["All Projects"]
         self.compact_view: str = "list"  # "list" or "detail" for narrow geometry
+        self.graph_focus_pane: str = "entities"  # "entities" or "topology" in Tab 3
+        self.selected_neighbor_idx: int = 0
+        self.traversal_history: List[str] = []
 
         self.flash_message: Optional[str] = None
         self.flash_until: float = 0.0
@@ -589,12 +631,20 @@ class TerminalInspector:
 
         # Shortcuts footer
         lines.append(f"{CYAN}{BOLD}{BOX_MID_LEFT}{border}{BOX_MID_RIGHT}{RESET}")
-        if width < 56:
-            keys_help = " [1-6] Tabs  [j/k] Move  [/] Find  [?] Help  [q] Quit "
-        elif width < 80:
-            keys_help = " [1-6] Tabs  [j/k] Scroll  [/] Search  [o] Proj  [?] Help  [q] Quit "
+        if self.active_tab == 3:
+            if width < 56:
+                keys_help = " [Tab] Focus  [Enter] Hop  [u] Back  [?] Help  [q] Quit "
+            elif width < 80:
+                keys_help = " [Tab] Switch Pane  [j/k] Move  [Enter] Hop Node  [u] Back  [?] Help  [q] Quit "
+            else:
+                keys_help = " [Tab] Focus Graph  [j/k/↑/↓] Select  [Enter] Hop Node  [u/Backspace] Back  [?] Help  [q] Quit "
         else:
-            keys_help = " [1-6] Tabs  [j/k/↑/↓] Scroll  [/] Search  [o] Project  [p] Prune  [c] Compact  [?] Help  [q] Quit "
+            if width < 56:
+                keys_help = " [1-6] Tabs  [j/k] Move  [/] Find  [?] Help  [q] Quit "
+            elif width < 80:
+                keys_help = " [1-6] Tabs  [j/k] Scroll  [/] Search  [o] Proj  [?] Help  [q] Quit "
+            else:
+                keys_help = " [1-6] Tabs  [j/k/↑/↓] Scroll  [/] Search  [o] Project  [p] Prune  [c] Compact  [?] Help  [q] Quit "
         footer_content = f"{BOLD}{keys_help}{RESET}"
         lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{_pad_cell(footer_content, width)}{CYAN}{BOLD}{BOX_VERT}{RESET}")
         lines.append(f"{CYAN}{BOLD}{BOX_BOT_LEFT}{border}{BOX_BOT_RIGHT}{RESET}")
@@ -787,55 +837,190 @@ class TerminalInspector:
         return combined
 
     def render_tab3_graph(self, width: int, max_lines: int) -> List[str]:
-        """Render Tab 3: Knowledge Graph Entities & Active Relations."""
+        """Render Tab 3: Interactive Topological Knowledge Graph with Directed Ego-Tree."""
         entities = fetch_graph_entities(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
-        relations = fetch_graph_relations(self.db_path, limit=25)
+        if not entities:
+            return [
+                f"  {YELLOW}No entities found in Knowledge Graph.{RESET}",
+                "",
+                "  Seed memories or use memory_record with relations to populate graph."
+            ]
 
-        use_split = width >= 80
-        if not use_split:
-            lines = []
-            lines.append(f"{BOLD}Knowledge Entities ({len(entities)}){RESET}")
-            lines.append(THIN_HORIZ * max(width - 4, 10))
-            for ent in entities[:max(max_lines // 2, 2)]:
-                name = ent["name"][:max(width - 24, 8)]
-                e_type = ent.get("entity_type", "concept")[:8]
-                edges = ent.get("edge_count", 0)
-                lines.append(f"  {BRIGHT_MAGENTA}●{RESET} {name} {DIM}({e_type}, {edges} rels){RESET}")
-            lines.append(THIN_HORIZ * max(width - 4, 10))
-            lines.append(f"{BOLD}Active Semantic Relations ({len(relations)}){RESET}")
-            for rel in relations[:max(max_lines - len(lines) - 1, 2)]:
-                src = rel["source"][:12]
-                r_type = rel["relation"][:10]
-                tgt = rel["target"][:12]
-                lines.append(f"  {BRIGHT_CYAN}{src}{RESET} -[{YELLOW}{r_type}{RESET}]-> {BRIGHT_CYAN}{tgt}{RESET}")
-            return lines[:max_lines]
+        # Clamp selection in entity directory
+        self.selected_index = max(0, min(self.selected_index, len(entities) - 1))
+        focal_ent = entities[self.selected_index]
+        focal_name = focal_ent["name"]
+        focal_type = focal_ent.get("entity_type", "concept")
+        focal_edges = focal_ent.get("edge_count", 0)
 
-        left_w = min(max(int(width * 0.44), 36), width - 36)
+        # Budget edges based on available vertical lines
+        max_edges_per_side = max((max_lines - 10) // 2, 2)
+        neighborhood = fetch_entity_neighborhood(self.db_path, focal_name, limit=max_edges_per_side + 5)
+        inbound = neighborhood["inbound"]
+        outbound = neighborhood["outbound"]
+        facts = neighborhood["facts"]
+
+        # Flatten neighbor nodes for keyboard selection/hopping
+        all_neighbors = []
+        for e in inbound:
+            all_neighbors.append({"direction": "in", "neighbor": e["neighbor"], "relation": e["relation"], "fact": e.get("fact", "")})
+        for e in outbound:
+            all_neighbors.append({"direction": "out", "neighbor": e["neighbor"], "relation": e["relation"], "fact": e.get("fact", "")})
+
+        if all_neighbors:
+            self.selected_neighbor_idx = max(0, min(self.selected_neighbor_idx, len(all_neighbors) - 1))
+        else:
+            self.selected_neighbor_idx = 0
+
+        # Narrow Geometry (< 65 cols): Togglable single-pane
+        if width < 65:
+            if self.compact_view == "detail":
+                lines = []
+                head_str = f"★ {focal_name} ({focal_edges} rels) [Enter: Hop | Esc: List]"
+                lines.append(f"{BOLD}{head_str}{RESET}")
+                lines.append(THIN_HORIZ * max(width - 4, 10))
+                if self.traversal_history:
+                    trail = " ➔ ".join(self.traversal_history[-2:] + [focal_name])
+                    lines.append(f"  {DIM}Path:{RESET} {BRIGHT_MAGENTA}{trail}{RESET}")
+                if not all_neighbors:
+                    lines.append("  (No connected relations)")
+                else:
+                    for n_idx, n in enumerate(all_neighbors[:max_lines - 4]):
+                        is_sel = (n_idx == self.selected_neighbor_idx)
+                        dir_icon = f"{BRIGHT_CYAN}◀{RESET}" if n["direction"] == "in" else f"{BRIGHT_YELLOW}▶{RESET}"
+                        rel_str = f"[{n['relation'][:8]}]"
+                        tgt_str = n["neighbor"][:max(width - 18, 6)]
+                        row = f"{'❯ ' if is_sel else '  '}{dir_icon} {rel_str} {tgt_str}"
+                        if is_sel:
+                            lines.append(f"{REVERSE}{BOLD}{_pad_cell(row, width - 4)}{RESET}")
+                        else:
+                            lines.append(_pad_cell(row, width - 4))
+                return lines[:max_lines]
+            else:
+                lines = []
+                lines.append(f"{BOLD}Knowledge Entities ({len(entities)}) [Enter: Graph]{RESET}")
+                lines.append(THIN_HORIZ * max(width - 4, 10))
+                visible_rows = max(max_lines - 3, 4)
+                start_idx = max(0, min(self.selected_index - visible_rows // 2, len(entities) - visible_rows))
+                end_idx = min(start_idx + visible_rows, len(entities))
+                for idx in range(start_idx, end_idx):
+                    ent = entities[idx]
+                    is_sel = (idx == self.selected_index)
+                    prefix = f"{BRIGHT_CYAN}❯{RESET} " if is_sel else "  "
+                    edges = ent.get("edge_count", 0)
+                    name = ent["name"][:max(width - 16, 6)]
+                    row = f"{prefix}{name} {DIM}({edges}){RESET}"
+                    if is_sel:
+                        lines.append(f"{REVERSE}{BOLD}{_pad_cell(row, width - 4)}{RESET}")
+                    else:
+                        lines.append(_pad_cell(row, width - 4))
+                return lines[:max_lines]
+
+        # Wide / Medium Geometry (width >= 65): Split Pane Directory + Interactive Topological Graph Canvas
+        left_w = min(max(int(width * 0.32), 24), 38)
         right_w = width - left_w - 1
 
+        # Left Pane: Entity Directory
         left_lines = []
-        left_lines.append(f"{BOLD}Knowledge Entities ({len(entities)}){RESET}")
-        left_lines.append(THIN_HORIZ * max(left_w - 2, 10))
-        for ent in entities[:max_lines - 4]:
-            name = ent["name"][:max(left_w - 18, 8)]
-            e_type = ent.get("entity_type", "concept")[:8]
-            edges = ent.get("edge_count", 0)
-            row = f"  {BRIGHT_MAGENTA}●{RESET} {name} {DIM}({e_type}, {edges} rels){RESET}"
-            left_lines.append(_pad_cell(row, left_w - 2))
+        is_left_focused = (self.graph_focus_pane == "entities")
+        focus_mark = f"{BRIGHT_CYAN}[Active]{RESET}" if is_left_focused else f"{DIM}[Tab to focus]{RESET}"
+        left_lines.append(f"{BOLD}Entities ({len(entities)}){RESET} {focus_mark}")
+        left_lines.append(THIN_HORIZ * max(left_w - 2, 8))
 
+        visible_rows = max(max_lines - 3, 4)
+        start_idx = max(0, min(self.selected_index - visible_rows // 2, len(entities) - visible_rows))
+        end_idx = min(start_idx + visible_rows, len(entities))
+        for idx in range(start_idx, end_idx):
+            ent = entities[idx]
+            is_sel = (idx == self.selected_index)
+            e_edges = ent.get("edge_count", 0)
+            name = ent["name"][:max(left_w - 14, 6)]
+            if is_sel and is_left_focused:
+                row = f"{BRIGHT_CYAN}❯{RESET} {BOLD}{name}{RESET} {DIM}({e_edges}){RESET}"
+                left_lines.append(f"{REVERSE}{_pad_cell(row, left_w - 2)}{RESET}")
+            elif is_sel:
+                row = f"{BRIGHT_MAGENTA}●{RESET} {BOLD}{name}{RESET} {DIM}({e_edges}){RESET}"
+                left_lines.append(_pad_cell(row, left_w - 2))
+            else:
+                row = f"  {name} {DIM}({e_edges}){RESET}"
+                left_lines.append(_pad_cell(row, left_w - 2))
+
+        # Right Pane: Visual Topological Ego-Graph Canvas
         right_lines = []
-        right_lines.append(f"{BOLD}Active Semantic Relations ({len(relations)}){RESET}")
+        is_right_focused = (self.graph_focus_pane == "topology")
+        canvas_focus = f"{BRIGHT_CYAN}[Active - Enter: Hop]{RESET}" if is_right_focused else f"{DIM}[Tab: Switch]{RESET}"
+        right_lines.append(f"{BOLD}Visual Topology: {focal_name}{RESET} {canvas_focus}")
         right_lines.append(THIN_HORIZ * max(right_w - 2, 10))
-        for rel in relations[:max_lines - 4]:
-            src = rel["source"][:16]
-            r_type = rel["relation"][:14]
-            tgt = rel["target"][:16]
-            edge_str = f"  {BRIGHT_CYAN}{src}{RESET} -[{YELLOW}{r_type}{RESET}]-> {BRIGHT_CYAN}{tgt}{RESET}"
-            right_lines.append(_pad_cell(edge_str, right_w - 2))
-            if rel.get("fact"):
-                fact_str = f"    {DIM}Fact:{RESET} {rel['fact'][:max(right_w - 12, 8)]}"
-                right_lines.append(_pad_cell(fact_str, right_w - 2))
 
+        if self.traversal_history:
+            trail = " ➔ ".join(self.traversal_history[-3:] + [focal_name])
+            right_lines.append(f"  {DIM}Path:{RESET} {BRIGHT_MAGENTA}{trail}{RESET} {DIM}[u: Back]{RESET}")
+
+        # Inbound Predecessors Section
+        in_count = len(inbound)
+        right_lines.append(f"  {BRIGHT_CYAN}▲ INBOUND PREDECESSORS ({in_count}){RESET}")
+        if inbound:
+            for idx_in, edge in enumerate(inbound[:max_edges_per_side]):
+                global_idx = idx_in
+                is_sel = (is_right_focused and global_idx == self.selected_neighbor_idx)
+                prefix = f"{BRIGHT_CYAN}❯{RESET} " if is_sel else "    "
+                src_name = edge["neighbor"]
+                rel = edge["relation"]
+                wire = f"──[{YELLOW}{rel}{RESET}]──►"
+                wire_len = len(f"──[{rel}]──►")
+                max_src = max(right_w - wire_len - 18, 6)
+                src_clean = src_name[:max_src]
+                row = f"{prefix}{BRIGHT_CYAN}{src_clean}{RESET} {wire} {DIM}(focal){RESET}"
+                if is_sel:
+                    right_lines.append(f"{REVERSE}{BOLD}{_pad_cell(row, right_w - 2)}{RESET}")
+                else:
+                    right_lines.append(_pad_cell(row, right_w - 2))
+            if in_count > max_edges_per_side:
+                right_lines.append(f"    {DIM}... and {in_count - max_edges_per_side} more inbound{RESET}")
+        else:
+            right_lines.append(f"    {DIM}(No inbound edges - root entity){RESET}")
+
+        # Hero Focal Node Box
+        focal_w = min(max(len(focal_name) + 8, 22), right_w - 6)
+        border_bar = BOX_HORIZ * (focal_w - 2)
+        pad_center = " " * max((right_w - focal_w) // 2, 2)
+        right_lines.append(f"{pad_center}{BRIGHT_MAGENTA}{BOX_TOP_LEFT}{border_bar}{BOX_TOP_RIGHT}{RESET}")
+        focal_title = f"★ {focal_name} ★"
+        right_lines.append(f"{pad_center}{BRIGHT_MAGENTA}{BOX_VERT}{RESET}{BOLD}{focal_title.center(focal_w - 2)}{RESET}{BRIGHT_MAGENTA}{BOX_VERT}{RESET}")
+        focal_meta = f"{focal_type} · {focal_edges} active rels"
+        right_lines.append(f"{pad_center}{BRIGHT_MAGENTA}{BOX_VERT}{RESET}{DIM}{focal_meta.center(focal_w - 2)}{RESET}{BRIGHT_MAGENTA}{BOX_VERT}{RESET}")
+        right_lines.append(f"{pad_center}{BRIGHT_MAGENTA}{BOX_BOT_LEFT}{border_bar}{BOX_BOT_RIGHT}{RESET}")
+
+        # Outbound Successors Section
+        out_count = len(outbound)
+        right_lines.append(f"  {BRIGHT_YELLOW}▼ OUTBOUND SUCCESSORS ({out_count}){RESET}")
+        if outbound:
+            for idx_out, edge in enumerate(outbound[:max_edges_per_side]):
+                global_idx = in_count + idx_out
+                is_sel = (is_right_focused and global_idx == self.selected_neighbor_idx)
+                prefix = f"{BRIGHT_CYAN}❯{RESET} " if is_sel else "    "
+                tgt_name = edge["neighbor"]
+                rel = edge["relation"]
+                wire = f"──[{YELLOW}{rel}{RESET}]──►"
+                wire_len = len(f"──[{rel}]──►")
+                max_tgt = max(right_w - wire_len - 18, 6)
+                tgt_clean = tgt_name[:max_tgt]
+                row = f"{prefix}{DIM}(focal){RESET} {wire} {BRIGHT_GREEN}{tgt_clean}{RESET}"
+                if is_sel:
+                    right_lines.append(f"{REVERSE}{BOLD}{_pad_cell(row, right_w - 2)}{RESET}")
+                else:
+                    right_lines.append(_pad_cell(row, right_w - 2))
+            if out_count > max_edges_per_side:
+                right_lines.append(f"    {DIM}... and {out_count - max_edges_per_side} more outbound{RESET}")
+        else:
+            right_lines.append(f"    {DIM}(No outbound edges - leaf entity){RESET}")
+
+        # Associated Facts
+        if facts and len(right_lines) < max_lines - 2:
+            fact_str = facts[0].replace("\n", " ")[:max(right_w - 14, 8)]
+            right_lines.append(f"  {BOLD}Fact:{RESET} {DIM}{fact_str}{RESET}")
+
+        # Combine Panes
         combined = []
         total_rows = max(len(left_lines), len(right_lines))
         for r in range(total_rows):
@@ -949,9 +1134,11 @@ class TerminalInspector:
 
         shortcuts = [
             ("1 - 6", "Jump directly to Tabs 1 - 6"),
-            ("Tab / Shift-Tab", "Next / Previous tab"),
-            ("← / → or h / l", "Switch active tab"),
-            ("↑ / ↓ or j / k", "Scroll list items & observations"),
+            ("Tab / Shift-Tab", "Next tab / Switch Graph pane (Tab 3)"),
+            ("← / → or h / l", "Switch active tab / Graph pane"),
+            ("↑ / ↓ or j / k", "Scroll list / neighbor items"),
+            ("Enter", "Hop to neighbor node (Tab 3) / Details"),
+            ("u / Backspace", "Return to previous Graph node (Tab 3)"),
             ("g / G", "Jump to top / bottom of list"),
             ("/", "Live FTS5 Search (in Explorer)"),
             ("o / P", "Cycle active project filter"),
@@ -1000,7 +1187,7 @@ class TerminalInspector:
         # Pad or truncate tab content
         for i in range(content_rows):
             if i < len(tab_lines):
-                line_content = tab_lines[i]
+                line_content = tab_lines[i].replace("\r", "").replace("\n", " ")
                 padded = _pad_cell(f" {line_content}", width)
                 screen_lines.append(f"{CYAN}{BOLD}{BOX_VERT}{RESET}{padded}{CYAN}{BOLD}{BOX_VERT}{RESET}{CLEAR_LINE}")
             else:
@@ -1090,6 +1277,8 @@ class TerminalInspector:
                         self.show_help = False
                     elif self.compact_view == "detail":
                         self.compact_view = "list"
+                    elif self.active_tab == 3 and self.graph_focus_pane == "topology":
+                        self.graph_focus_pane = "entities"
                     elif self.search_query:
                         self.search_query = ""
                         self.set_flash("Cleared search filter.", duration=1.5)
@@ -1097,6 +1286,34 @@ class TerminalInspector:
                     cols, _ = shutil.get_terminal_size((80, 24))
                     if cols < 80 and self.active_tab == 2:
                         self.compact_view = "detail" if self.compact_view == "list" else "list"
+                    elif self.active_tab == 3:
+                        if cols < 65 and self.compact_view == "list":
+                            self.compact_view = "detail"
+                        else:
+                            # Hop to selected neighbor
+                            entities = fetch_graph_entities(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
+                            if entities and 0 <= self.selected_index < len(entities):
+                                focal_name = entities[self.selected_index]["name"]
+                                neighborhood = fetch_entity_neighborhood(self.db_path, focal_name, limit=25)
+                                all_neighbors = [e["neighbor"] for e in neighborhood["inbound"]] + [e["neighbor"] for e in neighborhood["outbound"]]
+                                if all_neighbors and 0 <= self.selected_neighbor_idx < len(all_neighbors):
+                                    target_name = all_neighbors[self.selected_neighbor_idx]
+                                    if focal_name not in self.traversal_history:
+                                        self.traversal_history.append(focal_name)
+                                    names = [e["name"] for e in entities]
+                                    if target_name in names:
+                                        self.selected_index = names.index(target_name)
+                                    self.selected_neighbor_idx = 0
+                                    self.set_flash(f"► Hopped to '{target_name}' (depth {len(self.traversal_history)})", duration=2.0)
+                elif k in ("backspace", "\x7f", "\x08", "u"):
+                    if self.active_tab == 3 and self.traversal_history:
+                        prev_name = self.traversal_history.pop()
+                        entities = fetch_graph_entities(self.db_path, project=self.active_project if self.active_project != "All Projects" else None)
+                        names = [e["name"] for e in entities]
+                        if prev_name in names:
+                            self.selected_index = names.index(prev_name)
+                        self.selected_neighbor_idx = 0
+                        self.set_flash(f"◄ Returned to '{prev_name}'", duration=1.5)
                 elif k in ("?", "f1"):
                     self.show_help = not self.show_help
                 elif k in ("1", "2", "3", "4", "5", "6"):
@@ -1104,30 +1321,67 @@ class TerminalInspector:
                     if self.active_tab != target_tab:
                         self.active_tab = target_tab
                         self.selected_index = 0
+                        self.selected_neighbor_idx = 0
                         self.compact_view = "list"
+                        self.graph_focus_pane = "entities"
                         needs_clear = True
                         if target_tab == 6 and self.cached_audit is None:
                             self.set_flash("⏳ Scanning memory store for audit hygiene...", duration=5.0)
                             sys.stdout.write(f"{CLEAR_SCREEN}{self.render()}")
                             sys.stdout.flush()
                         self.set_flash(f"► Switched to [{target_tab}] {self.TAB_NAMES[target_tab - 1]}", duration=1.5)
-                elif k in ("tab", "right", "l"):
-                    self.active_tab = (self.active_tab % len(self.TAB_NAMES)) + 1
-                    self.selected_index = 0
-                    self.compact_view = "list"
-                    needs_clear = True
-                    self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
-                elif k in ("shift_tab", "left", "h"):
+                elif k == "tab":
+                    if self.active_tab == 3:
+                        self.graph_focus_pane = "topology" if self.graph_focus_pane == "entities" else "entities"
+                        self.set_flash(f"► Focused: {self.graph_focus_pane.title()} Pane", duration=1.0)
+                    else:
+                        self.active_tab = (self.active_tab % len(self.TAB_NAMES)) + 1
+                        self.selected_index = 0
+                        self.compact_view = "list"
+                        needs_clear = True
+                        self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
+                elif k in ("right", "l"):
+                    if self.active_tab == 3 and self.graph_focus_pane == "entities":
+                        self.graph_focus_pane = "topology"
+                        self.set_flash("► Focused: Topology Graph", duration=1.0)
+                    else:
+                        self.active_tab = (self.active_tab % len(self.TAB_NAMES)) + 1
+                        self.selected_index = 0
+                        self.compact_view = "list"
+                        self.graph_focus_pane = "entities"
+                        needs_clear = True
+                        self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
+                elif k in ("shift_tab",):
                     self.active_tab = len(self.TAB_NAMES) if self.active_tab == 1 else (self.active_tab - 1)
                     self.selected_index = 0
                     self.compact_view = "list"
+                    self.graph_focus_pane = "entities"
                     needs_clear = True
                     self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
+                elif k in ("left", "h"):
+                    if self.active_tab == 3 and self.graph_focus_pane == "topology":
+                        self.graph_focus_pane = "entities"
+                        self.set_flash("► Focused: Entity Directory", duration=1.0)
+                    else:
+                        self.active_tab = len(self.TAB_NAMES) if self.active_tab == 1 else (self.active_tab - 1)
+                        self.selected_index = 0
+                        self.compact_view = "list"
+                        self.graph_focus_pane = "entities"
+                        needs_clear = True
+                        self.set_flash(f"► Switched to [{self.active_tab}] {self.TAB_NAMES[self.active_tab - 1]}", duration=1.5)
                 elif k in ("up", "k"):
-                    if self.selected_index > 0:
+                    if self.active_tab == 3 and self.graph_focus_pane == "topology":
+                        if self.selected_neighbor_idx > 0:
+                            self.selected_neighbor_idx -= 1
+                    elif self.selected_index > 0:
                         self.selected_index -= 1
+                        self.selected_neighbor_idx = 0
                 elif k in ("down", "j"):
-                    self.selected_index += 1
+                    if self.active_tab == 3 and self.graph_focus_pane == "topology":
+                        self.selected_neighbor_idx += 1
+                    else:
+                        self.selected_index += 1
+                        self.selected_neighbor_idx = 0
                 elif k == "g":
                     self.selected_index = 0
                 elif k == "g":  # shift+g handled in raw

@@ -95,9 +95,19 @@ The TUI automatically detects terminal dimensions via `shutil.get_terminal_size(
   - Press `o` or `p` to cycle active project filter.
   - Press `d` to soft-delete (mark superseded) the selected memory.
 
-### `[3] Knowledge Graph`
-- **Left Pane (Entities)**: Top connected semantic entities and concepts ranked by edge connectivity count (`edge_count`).
-- **Right Pane (Relations)**: Active bi-temporal relation triples (`source -[RELATION]-> target`) with underlying factual context statements.
+### `[3] Knowledge Graph` (Interactive Visual Topology & Traversal)
+- **Left Pane (Entity Directory)**: Top semantic entities and concepts ranked by edge connectivity count (`edge_count`).
+- **Right Pane (Directed Ego-Tree Graph Canvas)**:
+  - **Inbound Predecessors**: Upstream nodes pointing into the focal node (`Node ──[REL]──► (focal)`).
+  - **Hero Focal Node Card**: Box capsule displaying active entity name, entity type, and active edge count.
+  - **Outbound Successors**: Downstream dependencies (`(focal) ──[REL]──► Target`).
+  - **Factual Context**: Attached technical assertions validating the active relationships.
+- **Graph Traversal Actions**:
+  - Press `Tab` or `l` / `→` to switch focus into the visual graph canvas.
+  - Press `j` / `k` or `↑` / `↓` to select connected neighbor nodes.
+  - Press `Enter` on any highlighted neighbor to **hop** to that node, re-centering the graph canvas and loading its neighborhood immediately.
+  - Press `u` or `Backspace` to navigate back through the traversal history stack.
+  - Press `Esc` or `h` / `←` to return focus to the entity directory.
 
 ### `[4] Code Graph & AST`
 - Real-time symbol table indexing functions, classes, and methods across the codebase.
