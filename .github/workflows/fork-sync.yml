@@ -72,12 +72,25 @@ jobs:
         if: steps.rebase.outputs.behind != '0'
         run: git push --force-with-lease origin HEAD:main
 
-      - name: Open issue on conflict
+      - name: Report conflict
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git rebase --abort || true
+          {
+            echo "### fork-sync failed"
+            echo ""
+            echo "Upstream moved ahead and the nightly rebase hit a conflict."
+            echo "Resolve locally: \`git fetch upstream && git rebase upstream/main\`, then"
+            echo "push the fork branch with \`git push --force-with-lease fork HEAD:main\`."
+            echo ""
+            echo "Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Best-effort: this fork has GitHub Issues disabled, so issue creation
+          # always errors. It must not add a second red step to the run -- the
+          # step summary above carries the reason instead.
           gh issue create \
             --title "fork-sync: rebase onto upstream/main needs manual resolution ($(date -u +%F))" \
-            --body "Nightly rebase failed (conflict or red tests). Fetch upstream, rebase locally, resolve, push. Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --body "Nightly rebase failed (conflict or red tests). Fetch upstream, rebase locally, resolve, push. Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || echo "Issues are disabled on this fork; the reason is in the run summary above."
