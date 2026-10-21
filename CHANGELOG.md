@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.2] - 2026-10-21
+
+### Added
+- **Interactive Visual Knowledge Graph Topology (`agi-tui` Tab 3)**:
+  - Replaced the flat relational table with a **Directed Topological Ego-Graph** centered on the active focal entity.
+  - **Inbound Predecessors Visualizer**: Color-coded upstream nodes pointing into focal node via directed connector wires (`Node ──[REL]──► (focal)`).
+  - **Hero Focal Node Card**: Centered Unicode box displaying active entity name, type, and total active relations.
+  - **Outbound Successors Visualizer**: Color-coded downstream dependencies (`(focal) ──[REL]──► Target`).
+  - **Hyperlink Graph Traversal (`Enter` / `u`)**: Press `Tab` or `l`/`→` to focus the graph canvas; highlight any neighbor node and press `Enter` to hop directly to that entity, traversing knowledge links interactively. Press `u` or `Backspace` to return to previously visited nodes.
+  - **100% Geometry-Responsive Layout**: Dynamically adapts across Wide ($\ge 80$ cols), Medium ($65-79$ cols), and Narrow ($< 65$ cols) viewports without line-wrapping or layout distortion.
+  - **Embedded Newline Sanitizer**: Stripped unescaped carriage returns and newlines inside memory facts/narratives to guarantee strictly bounded row counts in terminal canvases.
+
+---
+
 ## [0.14.1] - 2026-10-20
 
 ### Fixed
