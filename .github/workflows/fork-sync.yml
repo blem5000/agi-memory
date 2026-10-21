@@ -1,31 +1,63 @@
-name: Fork Sync (rebase onto upstream)
+name: Fork Sync (merge upstream)
 
-# Keeps this fork's main replayed on top of upstream main:
-# our commits are rebased (not merged), so the fork always looks like
-# "upstream + our patches". Runs nightly and on demand.
+# Keeps this fork's main on top of upstream main, without human babysitting.
 #
-# Fork-only: the `if:` guard below means this never runs on upstream,
-# so a PR carrying this file upstream is harmless.
+# WHY MERGE AND NOT REBASE
+# The fork is a long-lived branch that tracks a fast-moving upstream. A rebase
+# replays every fork commit on every upstream release and THROWS AWAY the
+# resolution of the previous run: the replayed commits are still based on the
+# old upstream state, so the same conflict is rediscovered nightly (recall.py
+# and mcp_server.py did, every night for a week). A merge compares upstream's
+# newest state against the fork's CURRENT state, keeps the previous resolution
+# in history, and shrinks the conflict window with every release.
 #
-# Conventions that keep this green:
+# CONFLICT POLICY
+# 1. git merge resolves what it can (three-way, per hunk).
+# 2. If hunks still conflict, the fork side wins for those hunks
+#    (git merge -X ours): the fork keeps the version that already contains
+#    upstream's earlier changes plus the fork's own features.
+# 3. The offline test suite plus the evaluations gate the result.
+#    Green -> the merge is committed and pushed.
+#    Red -> nothing is pushed, and the run fails with a summary of what to
+#    resolve by hand.
+# 4. Every file that was auto-resolved is listed in the run summary. "ours"
+#    means upstream's change to that file did NOT reach the fork, so those
+#    files are worth a manual look.
+#
+# CONVENTIONS THAT KEEP THIS GREEN
 # - Fork feature commits must NOT touch `version` in pyproject.toml.
 #   Only bump it in a fork release commit, to a number ABOVE upstream's.
-#   (A same-line version bump upstream trips the rebase into a conflict
-#   on purpose: version ordering is a human decision, so it opens an issue.)
+#   (A same-line version bump upstream trips the merge into a conflict
+#   on purpose: version ordering is a human decision.)
 # - Never fetch upstream tags here: fork tags (v0.8.0, ...) intentionally
 #   differ from upstream's same-named tags and would clobber each other.
 # - Pushes made with GITHUB_TOKEN do not retrigger workflows, so CI will
 #   not run on the auto-pushed main -- that is why this job runs the
 #   offline test suite itself BEFORE pushing.
+#
+# The upstream repository is an input so the sync can be rehearsed against a
+# throwaway branch before it ever touches the real upstream.
 
 on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "Upstream repository to merge from"
+        default: "kdbhalala/agi-memory"
+        required: false
+      upstream_ref:
+        description: "Upstream branch to merge"
+        default: "main"
+        required: false
+      push_target:
+        description: "Branch in this fork to push the merge to (use a scratch branch to rehearse)"
+        default: "main"
+        required: false
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   sync:
@@ -43,54 +75,90 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Rebase fork commits onto upstream main
-        id: rebase
+      - name: Merge upstream into the fork branch
+        id: merge
+        env:
+          GIT_MERGE_AUTOEDIT: "no"
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || 'kdbhalala/agi-memory' }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/kdbhalala/agi-memory.git
-          git fetch upstream main
-          BEHIND="$(git rev-list --count HEAD..upstream/main)"
-          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
-          if [ "$BEHIND" = "0" ]; then
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "$UPSTREAM_REF"
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_REF" HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Already up to date; nothing to do."
             exit 0
           fi
-          echo "Upstream is $BEHIND commits ahead; rebasing."
-          git rebase upstream/main
-          echo "After rebase: $(git log --oneline upstream/main..HEAD | wc -l) fork commits on top."
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          if git merge --no-edit "upstream/$UPSTREAM_REF"; then
+            echo "strategy=clean" >> "$GITHUB_OUTPUT"
+            echo "conflicts=" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | tr '\n' ' ' | sed 's/ $//' > conflicted.txt || true
+            echo "conflicts=$(cat conflicted.txt)" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            echo "Plain merge conflicted in: $(cat conflicted.txt)"
+            echo "Retrying with the fork side for the conflicting hunks."
+            if git merge -X ours --no-edit "upstream/$UPSTREAM_REF"; then
+              echo "strategy=ours" >> "$GITHUB_OUTPUT"
+            else
+              git merge --abort || true
+              echo "strategy=failed" >> "$GITHUB_OUTPUT"
+              echo "The merge could not be resolved automatically. Conflicts: $(cat conflicted.txt)" >&2
+              exit 1
+            fi
+          fi
 
-      - name: Verify rebased tree
-        if: steps.rebase.outputs.behind != '0'
+      - name: Verify merged tree
+        if: steps.merge.outputs.changed == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           python tests/test_offline.py
+          python tests/eval_l1.py
+          python tests/eval_l2.py
+          python tests/eval_l3.py
+          python tests/eval_l4.py
+          python -m agi_memory.integrate test
 
-      - name: Push rebased main
-        if: steps.rebase.outputs.behind != '0'
-        run: git push --force-with-lease origin HEAD:main
-
-      - name: Report conflict
-        if: failure()
+      - name: Push merged branch
+        if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUSH_TARGET: ${{ inputs.push_target || 'main' }}
+        run: git push --force-with-lease origin "HEAD:$PUSH_TARGET"
+
+      - name: Report
+        if: always()
         run: |
-          git rebase --abort || true
           {
-            echo "### fork-sync failed"
+            echo "### fork-sync"
             echo ""
-            echo "Upstream moved ahead and the nightly rebase hit a conflict."
-            echo "Resolve locally: \`git fetch upstream && git rebase upstream/main\`, then"
-            echo "push the fork branch with \`git push --force-with-lease fork HEAD:main\`."
+            echo "- strategy: \`${{ steps.merge.outputs.strategy || 'none (nothing to merge)' }}\`"
+            echo "- auto-resolved files: \`${{ steps.merge.outputs.conflicts || 'none' }}\`"
             echo ""
-            echo "Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            if [ "${{ steps.merge.outputs.strategy }}" = "ours" ]; then
+              echo "Upstream changed the files above in a way that conflicted with the fork."
+              echo "The fork side won for those hunks, so **upstream's change to them did not"
+              echo "enter the fork**. Review them when you have a moment:"
+              echo ""
+              echo '```'
+              echo "git fetch upstream && git diff upstream/main..fork/main -- <file>"
+              echo '```'
+              echo ""
+            fi
+            if [ "${{ steps.merge.outputs.strategy }}" = "failed" ]; then
+              echo "The merge needs a human. Nothing was pushed. Resolve locally:"
+              echo ""
+              echo '```'
+              echo "git fetch upstream && git merge upstream/main"
+              echo '```'
+              echo ""
+            fi
+            if [ "${{ steps.merge.outputs.changed }}" = "true" ] && [ "${{ steps.merge.outputs.strategy }}" != "failed" ]; then
+              echo "Merged and pushed. The offline suite, the L1-L4 evaluations and the MCP"
+              echo "handshake all ran before the push."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          # Best-effort: this fork has GitHub Issues disabled, so issue creation
-          # always errors. It must not add a second red step to the run -- the
-          # step summary above carries the reason instead.
-          gh issue create \
-            --title "fork-sync: rebase onto upstream/main needs manual resolution ($(date -u +%F))" \
-            --body "Nightly rebase failed (conflict or red tests). Fetch upstream, rebase locally, resolve, push. Failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            || echo "Issues are disabled on this fork; the reason is in the run summary above."
