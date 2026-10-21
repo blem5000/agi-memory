@@ -1726,6 +1726,16 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as _cap_tmp:
         rationale="provider ban threshold")
     assert _hk_pr.stop_decision({}, "cap-proj", _cap_db, str(_repo)) is None
 
+    # hook_stop is non-blocking by default unless AGI_MEMORY_ENFORCE_STOP=1
+    import io
+    _old_out = sys.stdout
+    try:
+        sys.stdout = io.StringIO()
+        _hk_pr.hook_stop("cap-proj")
+        assert sys.stdout.getvalue() == "", "hook_stop must emit nothing when AGI_MEMORY_ENFORCE_STOP is unset"
+    finally:
+        sys.stdout = _old_out
+
 # 10p. session-end returns fast: Claude Code cancels a SessionEnd hook still
 # running when it exits, which cut the seconds-long vault sync ("Hook
 # cancelled"). The sync is handed to a detached process, never run inline.
