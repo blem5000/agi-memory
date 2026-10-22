@@ -461,7 +461,14 @@ def stop_decision(payload: Dict[str, Any], project: Optional[str] = None,
 
 
 def hook_stop(project: Optional[str] = None) -> None:
-    """Stop: ask once for the why behind a session's changes (Claude Code blocks with a reason)."""
+    """Stop: ask once for the why behind a session's changes if explicitly enabled.
+    
+    In standard interactive sessions, emitting {"decision": "block"} causes Claude Code
+    to display a red "Stop hook error" UI banner and forces a loop. Blocking is therefore
+    opt-in via AGI_MEMORY_ENFORCE_STOP=1; otherwise exits cleanly with zero disruption.
+    """
+    if os.getenv("AGI_MEMORY_ENFORCE_STOP", "").lower() not in ("1", "true"):
+        return
     sys.path.insert(0, str(REPO_DIR))
     payload = _read_hook_payload()
     try:
@@ -934,7 +941,6 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     cmd_compact = f'"{py}" "{hooks_py}" pre-compact'
     cmd_end = f'"{py}" "{hooks_py}" session-end'
     cmd_prompt = f'"{py}" "{hooks_py}" user-prompt-submit'
-    cmd_stop = f'"{py}" "{hooks_py}" stop'
     cmd_pre = f'"{py}" "{hooks_py}" pre-tool'
     cmd_post = f'"{py}" "{hooks_py}" post-tool'
 
@@ -971,7 +977,9 @@ def install_claude_hooks(scope: str = "user", py_path: str = None) -> Tuple[bool
     _ensure_hook("PreCompact", cmd_compact)
     _ensure_hook("SessionEnd", cmd_end)
     _ensure_hook("UserPromptSubmit", cmd_prompt)
-    _ensure_hook("Stop", cmd_stop)
+    # Note: Stop hook intentionally omitted. Claude Code's Stop event treats decision:block
+    # as a hook error. SessionEnd already performs detached vault sync. To re-enable strict
+    # stop verification, set AGI_MEMORY_ENFORCE_STOP=1.
     _ensure_hook("PreToolUse", cmd_pre, matcher="Edit|Write|MultiEdit|Bash")
     _ensure_hook("PostToolUse", cmd_post, matcher="Bash")
 

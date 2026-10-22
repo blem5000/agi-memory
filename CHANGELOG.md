@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.14.3] - 2026-10-21
+
+### Fixed
+- **De-fang Stop Lifecycle Hook (`hook_stop`)**:
+  - Emitting `{"decision": "block", "reason": "..."}` during Claude Code's `Stop` lifecycle event triggered confusing red `Stop hook error` banners in the terminal and trapped agents in awkward retry loops.
+  - Made `hook_stop` blocking opt-in via `AGI_MEMORY_ENFORCE_STOP=1`. In default operation, `hook_stop` exits cleanly with code 0 and no output, ensuring smooth completion.
+  - Omitted the blocking `Stop` hook registration from `install_claude_hooks()`. Cleaned up legacy `Stop` hook registrations in `settings.json`, aligning Claude Code with Antigravity and OpenCode where `session-end` handles background vault sync and session wrap-up non-blockingly.
+
+---
+
 ## [0.14.2] - 2026-10-21
 
 ### Added
